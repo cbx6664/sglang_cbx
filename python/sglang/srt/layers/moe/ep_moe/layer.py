@@ -433,9 +433,10 @@ class EPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        logical_expert_id = expert_id
         physical_expert_ids = (
             get_global_expert_location_metadata().logical_to_all_physical(
-                self.layer_id, expert_id
+                self.layer_id, logical_expert_id
             )
         )
         for physical_expert_id in physical_expert_ids:
@@ -445,6 +446,7 @@ class EPMoE(torch.nn.Module):
                 weight_name=weight_name,
                 shard_id=shard_id,
                 expert_id=physical_expert_id,
+                logical_expert_id=logical_expert_id,
             )
 
     def _weight_loader_physical(
@@ -454,10 +456,13 @@ class EPMoE(torch.nn.Module):
         weight_name: str,
         shard_id: str,
         expert_id: int,
+        logical_expert_id: int,
     ) -> None:
         if expert_id < self.start_expert_id or expert_id > self.end_expert_id:
             return
-        expert_id = expert_id - self.start_expert_id
+        local_expert_id = expert_id - self.start_expert_id
+        # logger.info(f"[LOADING WEIGHTs] rank {self.tp_rank}, layer {self.layer_id}, logical_expert_id {logical_expert_id} -> physical_expert_ids {expert_id}, local_slot_index {local_expert_id}, weight_name {weight_name}, shard_id {shard_id}")
+
 
         if shard_id not in ("w1", "w2", "w3"):
             raise ValueError(
@@ -471,16 +476,16 @@ class EPMoE(torch.nn.Module):
                 loaded_weight,
                 weight_name,
                 shard_id,
-                expert_id,
+                local_expert_id,
             )
             return
 
         if shard_id == "w2":
-            param.data[expert_id] = loaded_weight
+            param.data[local_expert_id] = loaded_weight
         elif shard_id == "w1":
-            param.data[expert_id][: self.intermediate_size, :] = loaded_weight
+            param.data[local_expert_id][: self.intermediate_size, :] = loaded_weight
         elif shard_id == "w3":
-            param.data[expert_id][self.intermediate_size :, :] = loaded_weight
+            param.data[local_expert_id][self.intermediate_size :, :] = loaded_weight
         else:
             raise ValueError(f"Expected shard_id w1,w2 or w3 but got {shard_id}")
 
