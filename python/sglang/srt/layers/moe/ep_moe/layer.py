@@ -461,7 +461,7 @@ class EPMoE(torch.nn.Module):
         if expert_id < self.start_expert_id or expert_id > self.end_expert_id:
             return
         local_expert_id = expert_id - self.start_expert_id
-        # logger.info(f"[LOADING WEIGHTs] rank {self.tp_rank}, layer {self.layer_id}, logical_expert_id {logical_expert_id} -> physical_expert_ids {expert_id}, local_slot_index {local_expert_id}, weight_name {weight_name}, shard_id {shard_id}")
+        logger.info(f"[LOADING WEIGHTS] rank {self.tp_rank}, layer {self.layer_id}, logical_expert_id {logical_expert_id} -> physical_expert_ids {expert_id}, local_slot_index {local_expert_id}, weight_name {weight_name}, shard_id {shard_id}")
 
 
         if shard_id not in ("w1", "w2", "w3"):
