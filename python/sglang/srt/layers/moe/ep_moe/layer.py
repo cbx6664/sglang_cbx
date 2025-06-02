@@ -216,6 +216,88 @@ class EPMoE(torch.nn.Module):
 
         self.grouped_gemm_runner = None
 
+    def _log_simple_token_flow(self, topk_ids: torch.Tensor, topk_weights: torch.Tensor = None, reorder_topk_ids: torch.Tensor = None):
+        """简洁的token流向追踪: token -> logical expert -> physical rank -> physical slot"""
+        import os
+        log_token_distribution = os.getenv("SGLANG_LOG_TOKEN_DISTRIBUTION", "false").lower() == "true"
+        
+        if not log_token_distribution:
+            return
+            
+        try:
+            num_tokens = topk_ids.shape[0]
+            logger.info(f"[TOKEN FLOW] Layer {self.layer_id}, Rank {self.tp_rank}, Tokens: {num_tokens}")
+            
+            # Get expert location metadata
+            expert_location_metadata = get_global_expert_location_metadata()
+            
+            # Track all token assignments (not just current rank)
+            all_token_assignments = []
+            current_rank_assignments = []
+            
+            for token_idx in range(min(num_tokens, 10)):  # 只显示前10个token避免输出过多
+                for k in range(self.top_k):
+                    logical_expert_id = topk_ids[token_idx, k].item()
+                    weight = topk_weights[token_idx, k].item() if topk_weights is not None else "N/A"
+                    
+                    # Get physical locations for this logical expert
+                    if hasattr(expert_location_metadata, 'logical_to_all_physical'):
+                        physical_locations = expert_location_metadata.logical_to_all_physical(
+                            self.layer_id, logical_expert_id
+                        )
+                    else:
+                        physical_locations = [logical_expert_id]
+                    
+                    # Process all physical locations for this logical expert
+                    for physical_id in physical_locations:
+                        # Calculate which rank this physical expert belongs to
+                        target_rank = physical_id // self.num_experts_per_partition
+                        # Calculate the slot on the target rank
+                        physical_slot_on_target_rank = physical_id - target_rank * self.num_experts_per_partition
+                        
+                        assignment_info = {
+                            'token': token_idx,
+                            'k': k,
+                            'logical_expert': logical_expert_id,
+                            'physical_id': physical_id,
+                            'target_rank': target_rank,
+                            'physical_slot': physical_slot_on_target_rank,
+                            'weight': weight,
+                            'is_current_rank': target_rank == self.tp_rank
+                        }
+                        
+                        all_token_assignments.append(assignment_info)
+                        
+                        # Track assignments to current rank separately
+                        if target_rank == self.tp_rank:
+                            current_rank_assignments.append(assignment_info)
+            
+            # Display all token assignments
+            logger.info(f"  All token assignments:")
+            for info in all_token_assignments:
+                rank_marker = "*" if info['is_current_rank'] else " "
+                logger.info(f"   {rank_marker} Token{info['token']}(k{info['k']}) -> LE{info['logical_expert']} -> PE{info['physical_id']}@rank{info['target_rank']}:slot{info['physical_slot']} (weight:{info['weight']:.4f})")
+            
+            # Display current rank summary
+            if current_rank_assignments:
+                logger.info(f"  Current rank {self.tp_rank} assignments:")
+                for info in current_rank_assignments:
+                    logger.info(f"    Token{info['token']}(k{info['k']}) -> slot{info['physical_slot']} (PE{info['physical_id']}, weight:{info['weight']:.4f})")
+            else:
+                logger.info(f"  No tokens assigned to current rank {self.tp_rank}")
+            
+            # Summary statistics for current rank using reorder_topk_ids
+            if reorder_topk_ids is not None:
+                logger.info(f"  Physical expert utilization on rank {self.tp_rank}:")
+                for expert_id in range(self.start_expert_id, self.end_expert_id + 1):
+                    count = (reorder_topk_ids == expert_id).sum().item()
+                    if count > 0:
+                        physical_slot = expert_id - self.start_expert_id
+                        logger.info(f"    Slot{physical_slot} (PE{expert_id}): {count} tokens total")
+                        
+        except Exception as e:
+            logger.warning(f"Failed to log simple token flow for layer {self.layer_id}: {e}")
+
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         hidden_states_shape = hidden_states.shape
         hidden_states_dtype = hidden_states.dtype
@@ -248,6 +330,9 @@ class EPMoE(torch.nn.Module):
         reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
             topk_ids, self.num_experts
         )
+
+        # 简洁的token流向追踪: token -> logical expert -> physical rank -> local slot
+        self._log_simple_token_flow(topk_ids, topk_weights, reorder_topk_ids)
 
         gateup_input = torch.empty(
             (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
@@ -395,6 +480,7 @@ class EPMoE(torch.nn.Module):
             hidden_states_shape[1],
             BLOCK_SIZE=512,
         )
+        
         return output
 
     @classmethod
@@ -1009,25 +1095,41 @@ class DeepEPMoE(EPMoE):
             device=hidden_states_device,
             dtype=hidden_states_dtype,
         )
-        if down_input.shape[0] > 0:
-            down_output = self.grouped_gemm_runner(
-                a=down_input,
-                b=self.w2_weight,
-                c=down_output,
-                batch_size=self.num_experts_per_partition,
-                weight_column_major=True,
-                seg_indptr=seg_indptr,
-                weight_indices=weight_indices_cur_rank,
-                use_fp8_w8a8=self.use_fp8_w8a8,
-                scale_a=self.w2_input_scale,
-                scale_b=(
-                    self.w2_weight_scale_inv
-                    if self.use_block_quant
-                    else self.w2_weight_scale
-                ),
-                block_shape=self.block_shape,
-            )
-        return down_output
+        down_output = self.grouped_gemm_runner(
+            a=down_input,
+            b=self.w2_weight,
+            c=down_output,
+            batch_size=self.num_experts_per_partition,
+            weight_column_major=True,
+            seg_indptr=seg_indptr,
+            weight_indices=weight_indices_cur_rank,
+            use_fp8_w8a8=self.use_fp8_w8a8,
+            scale_a=self.w2_input_scale,
+            scale_b=(
+                self.w2_weight_scale_inv
+                if self.use_block_quant
+                else self.w2_weight_scale
+            ),
+            block_shape=self.block_shape,
+        )
+        del down_input
+
+        # PostReorder
+        output = torch.empty(
+            hidden_states.shape, dtype=hidden_states.dtype, device=hidden_states.device
+        )
+        post_reorder_triton_kernel[(hidden_states.shape[0],)](
+            down_output,
+            output,
+            reorder_topk_ids,
+            topk_weights,
+            0,
+            self.num_experts_per_partition - 1,
+            hidden_states.shape[1],
+            BLOCK_SIZE=512,
+        )
+        
+        return output
 
     def forward_deepgemm_contiguous(
         self,
