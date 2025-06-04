@@ -3,6 +3,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import os
 import time
 from typing import Tuple
 
@@ -19,6 +20,7 @@ class BenchArgs:
     dataset_path: str = "/work1/amd/bingxche/data/09292024_mixtral_15k_mintoken2_v1.pkl"
     num_samples: int = 100
     result_filename: str = "result.jsonl"
+    result_dir: str = "."
     profile: bool = False
     profile_filename_prefix: str = "profile"
     temperature: float = 1.0
@@ -26,6 +28,8 @@ class BenchArgs:
     top_p: float = 0.001
     max_new_tokens: int = 1024
     ignore_eos: bool = False
+    record_expert_distribution: bool = False
+    expert_distribution_dir: str = "/tmp/expert_distribution"
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -35,6 +39,8 @@ class BenchArgs:
                            help="Number of samples to use from dataset")
         parser.add_argument("--result-filename", type=str, default=BenchArgs.result_filename,
                            help="Output filename for results")
+        parser.add_argument("--result-dir", type=str, default=BenchArgs.result_dir,
+                           help="Directory to save result files")
         parser.add_argument("--profile", action="store_true",
                            help="Enable profiling")
         parser.add_argument("--profile-filename-prefix", type=str, default=BenchArgs.profile_filename_prefix,
@@ -49,6 +55,10 @@ class BenchArgs:
                            help="Maximum number of new tokens to generate")
         parser.add_argument("--ignore-eos", action="store_true",
                            help="Ignore EOS token during generation")
+        parser.add_argument("--record-expert-distribution", action="store_true",
+                           help="Enable expert distribution recording")
+        parser.add_argument("--expert-distribution-dir", type=str, default=BenchArgs.expert_distribution_dir,
+                           help="Directory to save expert distribution files")
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
@@ -56,9 +66,16 @@ class BenchArgs:
         return cls(**{attr: getattr(args, attr) for attr in attrs})
 
 
-def get_sglang_engine(server_args: ServerArgs):
+def get_sglang_engine(server_args: ServerArgs, bench_args: BenchArgs):
     """Create SGLang engine instance using ServerArgs"""
-    # The correct way: pass all ServerArgs as dict to Engine
+    # Enable expert distribution recorder if requested
+    if bench_args.record_expert_distribution:
+        if server_args.expert_distribution_recorder_mode is None:
+            server_args.expert_distribution_recorder_mode = "stat"
+        # Set environment variable for output directory
+        os.makedirs(bench_args.expert_distribution_dir, exist_ok=True)
+        os.environ["SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR"] = bench_args.expert_distribution_dir
+    
     return sgl.Engine(**dataclasses.asdict(server_args))
 
 
@@ -77,7 +94,11 @@ def load_real_dataset(dataset_path, num_samples=100):
 
 def profile_run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: BenchArgs):
     """Run SGLang with profiling enabled"""
-    llm = get_sglang_engine(server_args)
+    llm = get_sglang_engine(server_args, bench_args)
+    
+    # Expert distribution recording
+    if bench_args.record_expert_distribution:
+        llm.start_expert_distribution_record()
     
     # Create profile output filename
     profile_filename = f"{bench_args.profile_filename_prefix}_samples{len(prompts)}.trace.json.gz"
@@ -94,6 +115,10 @@ def profile_run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_
         responses = llm.generate(prompt=prompts, sampling_params=sampling_params)
         end = time.perf_counter()
     
+    if bench_args.record_expert_distribution:
+        llm.stop_expert_distribution_record()
+        llm.dump_expert_distribution_record()
+    
     print(p.key_averages().table(sort_by="self_cpu_time_total", row_limit=20))
     print(p.key_averages().table(sort_by="self_cuda_time_total", row_limit=20))
     print(f"Profile saved to {profile_dir}")
@@ -103,26 +128,70 @@ def profile_run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_
 
 def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: BenchArgs):
     """Run SGLang inference"""
-    llm = get_sglang_engine(server_args)
+    llm = get_sglang_engine(server_args, bench_args)
+    
+    # Expert distribution recording
+    if bench_args.record_expert_distribution:
+        llm.start_expert_distribution_record()
     
     start = time.perf_counter()
     responses = llm.generate(prompt=prompts, sampling_params=sampling_params)
     end = time.perf_counter()
     
-    # Extract token counts from responses
+    if bench_args.record_expert_distribution:
+        llm.stop_expert_distribution_record()
+        llm.dump_expert_distribution_record()
+        print(f"Expert distribution saved to: {bench_args.expert_distribution_dir}")
+    
+    # Extract token counts and analyze end reasons
     input_tokens = 0
     output_tokens = 0
+    end_reason_stats = {}
+    sample_responses = []
     
-    for response in responses:
+    for i, response in enumerate(responses):
         if 'meta_info' in response:
             input_tokens += response['meta_info'].get('prompt_tokens', 0)
             output_tokens += response['meta_info'].get('completion_tokens', 0)
+            
+            # Track end reasons - handle both string and dict cases
+            finish_reason_raw = response['meta_info'].get('finish_reason', 'unknown')
+            if isinstance(finish_reason_raw, dict):
+                # If it's a dict, try to extract the actual reason
+                finish_reason = str(finish_reason_raw.get('reason', finish_reason_raw))
+            elif isinstance(finish_reason_raw, str):
+                finish_reason = finish_reason_raw
+            else:
+                finish_reason = str(finish_reason_raw)
+            
+            end_reason_stats[finish_reason] = end_reason_stats.get(finish_reason, 0) + 1
+        
+        # Collect sample responses (first 3)
+        if i < 3:
+            # Extract finish reason for sample
+            finish_reason_raw = response.get('meta_info', {}).get('finish_reason', 'unknown')
+            if isinstance(finish_reason_raw, dict):
+                finish_reason_display = str(finish_reason_raw.get('reason', finish_reason_raw))
+            elif isinstance(finish_reason_raw, str):
+                finish_reason_display = finish_reason_raw
+            else:
+                finish_reason_display = str(finish_reason_raw)
+                
+            sample_responses.append({
+                'prompt_preview': prompts[i][:100] + "..." if len(prompts[i]) > 100 else prompts[i],
+                'response': response.get('text', ''),
+                'finish_reason': finish_reason_display,
+                'prompt_tokens': response.get('meta_info', {}).get('prompt_tokens', 0),
+                'completion_tokens': response.get('meta_info', {}).get('completion_tokens', 0)
+            })
     
     total_tokens = input_tokens + output_tokens
     num_requests = len(prompts)
     elapsed_time = end - start
     
     # Save results to JSON file
+    os.makedirs(bench_args.result_dir, exist_ok=True)
+    result_path = os.path.join(bench_args.result_dir, bench_args.result_filename)
     result = {
         "model_path": server_args.model_path,
         "tp_size": server_args.tp_size,
@@ -138,6 +207,10 @@ def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: Be
         "output_tokens_per_second": output_tokens / elapsed_time,
         "avg_input_tokens": input_tokens / num_requests,
         "avg_output_tokens": output_tokens / num_requests,
+        "end_reason_stats": end_reason_stats,
+        "sample_responses": sample_responses,
+        "server_args": dataclasses.asdict(server_args),
+        "bench_args": dataclasses.asdict(bench_args),
         "sampling_params": {
             "temperature": bench_args.temperature,
             "top_k": bench_args.top_k,
@@ -148,16 +221,32 @@ def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: Be
     }
     
     # Save to JSONL file
-    with open(bench_args.result_filename, 'a') as f:
+    with open(result_path, 'a') as f:
         f.write(json.dumps(result) + '\n')
     
     print(f"time: {elapsed_time:.2f}s")
     print(f"average input tokens: {input_tokens / num_requests:.1f}")
     print(f"average output tokens: {output_tokens / num_requests:.1f}")
+    
+    # Print end reason statistics
+    print(f"\n=== END REASON STATISTICS ===")
+    for reason, count in end_reason_stats.items():
+        percentage = (count / num_requests) * 100
+        print(f"{reason}: {count} ({percentage:.1f}%)")
+    
+    # Print sample responses
+    print(f"\n=== SAMPLE RESPONSES ===")
+    for i, sample in enumerate(sample_responses):
+        print(f"\nSample {i+1}:")
+        print(f"  Prompt: {sample['prompt_preview']}")
+        print(f"  Finish reason: {sample['finish_reason']}")
+        print(f"  Tokens: {sample['prompt_tokens']} -> {sample['completion_tokens']}")
+        print(f"  Response: {sample['response'][:200]}..." if len(sample['response']) > 200 else f"  Response: {sample['response']}")
+    
     print("sample response:", responses[0]['text'][:100] if responses else "No response")
     
     llm.shutdown()
-    return input_tokens, output_tokens, elapsed_time
+    return input_tokens, output_tokens, elapsed_time, result_path
 
 
 def main(server_args: ServerArgs, bench_args: BenchArgs):
@@ -181,7 +270,7 @@ def main(server_args: ServerArgs, bench_args: BenchArgs):
     if bench_args.profile:
         profile_run_sglang(prompts, sampling_params, server_args, bench_args)
     else:
-        input_tokens, output_tokens, elapsed_time = run_sglang(prompts, sampling_params, server_args, bench_args)
+        input_tokens, output_tokens, elapsed_time, result_path = run_sglang(prompts, sampling_params, server_args, bench_args)
         
         total_tokens = input_tokens + output_tokens
         num_requests = len(prompts)
@@ -200,7 +289,7 @@ def main(server_args: ServerArgs, bench_args: BenchArgs):
         print(f"Output tokens/s: {output_tokens / elapsed_time:.2f}")
         print(f"Total tokens processed: {total_tokens:,}")
         
-        print(f"\nResults saved to {bench_args.result_filename}")
+        print(f"\nResults saved to {result_path}")
 
 
 if __name__ == "__main__":
