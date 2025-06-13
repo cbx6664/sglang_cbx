@@ -63,6 +63,14 @@ class EPLBManager:
         logical_count = get_global_expert_distribution_recorder().dump_record(
             output_mode="object"
         )["logical_count"]
+        
+        # Sum up the logical counts and print
+        summed_logical_count = logical_count.sum(dim=0)  # Shape: [num_layer, num_experts]
+        if self._model_runner.tp_rank == 0:  # Only print on rank 0
+            logger.info(f"[EPLBManager] Expert distribution data shape: {summed_logical_count.shape}")
+            torch.set_printoptions(threshold=float('inf'))
+            logger.info(f"[EPLBManager] Expert distribution data content (summed across {self._rebalance_num_iterations} forward passes):\n{summed_logical_count}")
+
         expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
             self._server_args, self._model_runner.model_config, logical_count
         )
