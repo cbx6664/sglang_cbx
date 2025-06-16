@@ -123,7 +123,8 @@ class EPLBManager:
         logger.info(f"[EPLBManager] Starting visualization of expert distribution (iteration {rebalance_iteration})")
         
         # Create output directory from environment variable or use default
-        plot_dir = os.getenv("PLOT_DIR", "/tmp/eplb_visualization")
+        plot_dir = Path(os.getenv("PLOT_DIR", "/tmp/eplb_visualization"))
+        plot_dir.mkdir(parents=True, exist_ok=True)
         # Create subfolder for this rebalance iteration
         subfolder_name = f"eplb-rebalance-{rebalance_iteration}"
         output_dir = Path(plot_dir) / subfolder_name
