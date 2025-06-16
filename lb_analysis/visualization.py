@@ -41,76 +41,134 @@ class LoadBalanceVisualizer:
             boxplot_path: File path to save boxplot
             title_prefix: Prefix for plot titles
         """
+        # print(f"[DEBUG] Starting plot_gpu_loads_analysis with shape: {gpu_loads.shape}")
+        # print(f"[DEBUG] GPU loads range: [{gpu_loads.min():.6f}, {gpu_loads.max():.6f}]")
+        # print(f"[DEBUG] GPU loads sum: {gpu_loads.sum():.6f}")
+        
         # Normalize the gpu loads per layer
         layer_sums = gpu_loads.sum(dim=1, keepdim=True)
+        # print(f"[DEBUG] Layer sums range: [{layer_sums.min():.6f}, {layer_sums.max():.6f}]")
+        
+        # Check for zero layer sums
+        zero_layers = (layer_sums == 0).squeeze()
+        if zero_layers.any():
+            # print(f"[WARNING] Found {zero_layers.sum()} layers with zero sum, this will cause NaN in normalization")
+            # Handle zero layer sums by setting them to 1 to avoid division by zero
+            layer_sums = torch.where(layer_sums == 0, torch.ones_like(layer_sums), layer_sums)
+        
         normalized_gpu_loads = gpu_loads / layer_sums
+        # print(f"[DEBUG] Normalized GPU loads range: [{normalized_gpu_loads.min():.6f}, {normalized_gpu_loads.max():.6f}]")
+        # print(f"[DEBUG] Contains NaN: {torch.isnan(normalized_gpu_loads).any()}")
+        # print(f"[DEBUG] Contains Inf: {torch.isinf(normalized_gpu_loads).any()}")
 
         # Heatmap: Normalized Load per layer per GPU
         plt.figure(figsize=(12, 10))
-        sns.heatmap(
-            normalized_gpu_loads.numpy(),
-            cmap="Reds",
-            annot=True,
-            fmt=".3f",
-            linewidths=0.5,
-            cbar_kws={"label": "Normalized Load"},
-            yticklabels=list(range(gpu_loads.shape[0])),
-            xticklabels=[f"GPU{i}" for i in range(gpu_loads.shape[1])],
-            annot_kws={"size": 8},
-        )
-        plt.xlabel("GPU Index")
-        plt.ylabel("Layer ID")
-        plt.title(f"{title_prefix} Normalized GPU Loads per Layer")
-        plt.tight_layout()
-        plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
-        print(f"Heatmap saved to: {heatmap_path}")
-        plt.close()
+        try:
+            sns.heatmap(
+                normalized_gpu_loads.numpy(),
+                cmap="Reds",
+                annot=True,
+                fmt=".3f",
+                linewidths=0.5,
+                cbar_kws={"label": "Normalized Load"},
+                yticklabels=list(range(gpu_loads.shape[0])),
+                xticklabels=[f"GPU{i}" for i in range(gpu_loads.shape[1])],
+                annot_kws={"size": 8},
+            )
+            plt.xlabel("GPU Index")
+            plt.ylabel("Layer ID")
+            plt.title(f"{title_prefix} Normalized GPU Loads per Layer")
+            plt.tight_layout()
+            plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
+            print(f"Heatmap saved to: {heatmap_path}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save heatmap: {e}")
+        finally:
+            plt.close()
 
         # Boxplot: Distribution of normalized GPU loads across layers
         plt.figure(figsize=(12, 8))
         
-        # Create boxplot data
-        data = normalized_gpu_loads.numpy()  # shape: [num_layers, num_gpus]
-        num_layers, num_gpus = data.shape
-        
-        # Prepare data for boxplot - each GPU's data across all layers
-        gpu_data = [data[:, i] for i in range(num_gpus)]  # List of arrays, each with data for one GPU
-        gpu_labels = [f"GPU{i}" for i in range(num_gpus)]
-        
-        # Create boxplot
-        box_plot = plt.boxplot(gpu_data, labels=gpu_labels, patch_artist=True, showmeans=True)
-        
-        # Color the boxes
-        colors = sns.color_palette("husl", num_gpus)
-        for patch, color in zip(box_plot['boxes'], colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
-        
-        # Add ideal line
-        ideal_load = 1.0 / num_gpus
-        plt.axhline(y=ideal_load, color="red", linestyle="--", linewidth=2, 
-                   label=f"Ideal Load ({ideal_load:.3f})")
-        
-        # Calculate and display overall statistics
-        overall_std = data.flatten().std()
-        overall_cv = overall_std / data.flatten().mean()
-        
-        plt.text(0.02, 0.98, 
-                f"Overall Std Dev: σ = {overall_std:.6f}\nCoeff. of Variation: {overall_cv:.6f}",
-                transform=plt.gca().transAxes,
-                verticalalignment='top',
-                bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", 
-                         facecolor="white", alpha=0.8))
-        
-        plt.xlabel("GPU Index")
-        plt.ylabel("Normalized Load")
-        plt.title(f"{title_prefix} GPU Load Distribution Across Layers")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
-        print(f"Boxplot saved to: {boxplot_path}")
-        plt.close()
+        try:
+            # Create boxplot data
+            data = normalized_gpu_loads.numpy()  # shape: [num_layers, num_gpus]
+            num_layers, num_gpus = data.shape
+            print(f"[DEBUG] Boxplot data shape: {data.shape}")
+            
+            # Remove NaN and Inf values for boxplot
+            if np.isnan(data).any() or np.isinf(data).any():
+                print(f"[WARNING] Removing NaN/Inf values from boxplot data")
+                data = np.nan_to_num(data, nan=0.0, posinf=1.0, neginf=0.0)
+            
+            # Prepare data for boxplot - each GPU's data across all layers
+            gpu_data = [data[:, i] for i in range(num_gpus)]  # List of arrays, each with data for one GPU
+            gpu_labels = [f"GPU{i}" for i in range(num_gpus)]
+            
+            # print(f"[DEBUG] GPU data lengths: {[len(gpu_data[i]) for i in range(min(3, num_gpus))]}")
+            # print(f"[DEBUG] Sample GPU0 data: {gpu_data[0][:5] if len(gpu_data[0]) > 0 else 'empty'}")
+            
+            # Check if all data is the same (which would make boxplot invisible)
+            data_std = data.std()
+            # print(f"[DEBUG] Data standard deviation: {data_std:.6f}")
+            
+            if data_std < 1e-10:
+                print(f"[WARNING] Data has very low variance (std={data_std:.6f}), boxplot may not be visible")
+            
+            # Create boxplot
+            box_plot = plt.boxplot(gpu_data, labels=gpu_labels, patch_artist=True, showmeans=True)
+            print(f"[DEBUG] Boxplot created successfully")
+            
+            # Color the boxes
+            colors = sns.color_palette("husl", num_gpus)
+            for patch, color in zip(box_plot['boxes'], colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            
+            # Add ideal line
+            ideal_load = 1.0 / num_gpus
+            plt.axhline(y=ideal_load, color="red", linestyle="--", linewidth=2, 
+                       label=f"Ideal Load ({ideal_load:.3f})")
+            
+            # Calculate and display overall statistics
+            overall_std = data.flatten().std()
+            overall_cv = overall_std / data.flatten().mean() if data.flatten().mean() != 0 else 0
+            
+            plt.text(0.02, 0.98, 
+                    f"Overall Std Dev: σ = {overall_std:.6f}\nCoeff. of Variation: {overall_cv:.6f}",
+                    transform=plt.gca().transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", 
+                             facecolor="white", alpha=0.8))
+            
+            plt.xlabel("GPU Index")
+            plt.ylabel("Normalized Load")
+            plt.title(f"{title_prefix} GPU Load Distribution Across Layers")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Set y-axis limits to ensure visibility
+            y_min, y_max = data.min(), data.max()
+            if y_max - y_min > 0:
+                margin = (y_max - y_min) * 0.1
+                plt.ylim(y_min - margin, y_max + margin)
+            
+            plt.tight_layout()
+            plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
+            print(f"Boxplot saved to: {boxplot_path}")
+            
+            # Check file size
+            if boxplot_path.exists():
+                file_size = boxplot_path.stat().st_size
+                print(f"[DEBUG] Boxplot file size: {file_size} bytes")
+                if file_size == 0:
+                    print(f"[ERROR] Boxplot file is empty!")
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to create boxplot: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        finally:
+            plt.close()
 
     def plot_algorithm_comparison(self, 
                                  comparison_data: Dict[str, Dict[str, float]], 

@@ -170,6 +170,7 @@ def plot_hotness_heatmap(
     import seaborn as sns
 
     # Normalize per layer (row-wise)
+    hotness = hotness.cpu()
     layer_sums = hotness.sum(dim=1, keepdim=True)
     normalized_hotness = hotness / layer_sums  # shape [58, 256]
 

@@ -19,40 +19,13 @@ from pathlib import Path
 # Fix OpenMP conflicts
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-# Add current directory to Python path
+# Add current directory to Python path for direct script execution
 current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir))
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
 
-# Import modules
-try:
-    from load_balance_analyzer import LoadBalanceAnalyzer
-except ImportError:
-    # Fix module imports if needed
-    print("Fixing module imports...")
-
-    analyzer_file = current_dir / "load_balance_analyzer.py"
-    if analyzer_file.exists():
-        with open(analyzer_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # Replace relative imports
-        content = content.replace("from .utils import", "from utils import")
-        content = content.replace("from .algorithms import",
-                                  "from algorithms import")
-        content = content.replace("from .visualization import",
-                                  "from visualization import")
-
-        # Ensure SimpleReplicationAlgorithm is included
-        if "SimpleReplicationAlgorithm" not in content:
-            content = content.replace(
-                "from algorithms import EPLBAlgorithm, BLDMAlgorithm",
-                "from algorithms import EPLBAlgorithm, BLDMAlgorithm, SimpleReplicationAlgorithm"
-            )
-
-        with open(analyzer_file, 'w', encoding='utf-8') as f:
-            f.write(content)
-
-    from load_balance_analyzer import LoadBalanceAnalyzer
+# Import the analyzer
+from load_balance_analyzer import LoadBalanceAnalyzer
 
 
 def main():

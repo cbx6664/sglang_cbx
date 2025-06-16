@@ -17,26 +17,15 @@ import torch
 import pandas as pd
 import numpy as np
 
-try:
-    # 尝试相对导入 (当作为包使用时)
-    from .utils import (
-        load_csv_to_tensor,
-        load_json_to_tensor,
-        natural_sort_key,
-        measure_execution_time
-    )
-    from .algorithms import EPLBAlgorithm, BLDMAlgorithm, SimpleReplicationAlgorithm
-    from .visualization import LoadBalanceVisualizer
-except ImportError:
-    # 回退到绝对导入 (当直接运行脚本时)
-    from utils import (
-        load_csv_to_tensor,
-        load_json_to_tensor,
-        natural_sort_key,
-        measure_execution_time
-    )
-    from algorithms import EPLBAlgorithm, BLDMAlgorithm, SimpleReplicationAlgorithm
-    from visualization import LoadBalanceVisualizer
+# Standard package imports - use relative imports within package
+from .utils import (
+    load_csv_to_tensor,
+    load_json_to_tensor,
+    natural_sort_key,
+    measure_execution_time
+)
+from .algorithms import EPLBAlgorithm, BLDMAlgorithm, SimpleReplicationAlgorithm
+from .visualization import LoadBalanceVisualizer
 
 
 class LoadBalanceAnalyzer:
