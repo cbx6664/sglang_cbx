@@ -567,7 +567,6 @@ def grouped_gemm_triton_kernel(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
-    BF16_DOT: tl.constexpr,
 ):
     c_dtype = c.dtype.element_ty
 
@@ -621,16 +620,7 @@ def grouped_gemm_triton_kernel(
             offs_ks = k_start // group_k
             a_scale = tl.load(a_scale_ptrs + offs_ks * as_stride_1)
             b_scale = tl.load(b_scale_ptrs + offs_ks * bs_stride_2)
-            if BF16_DOT:
-                # for MI300X workaround: up-cast to BF16 workaround
-                a_tile_bf16 = a_tile.to(tl.bfloat16)
-                b_tile_bf16 = b_tile.to(tl.bfloat16)
-                dot_res = tl.dot(a_tile_bf16, b_tile_bf16.T)
-            else:
-                dot_res = tl.dot(a_tile, b_tile.T)
-
-            accumulator += dot_res * a_scale * b_scale[None, :]
-
+            accumulator += tl.dot(a_tile, b_tile.T) * a_scale * b_scale[None, :]
         else:
             accumulator = tl.dot(a_tile, b_tile.T, accumulator)
         a_ptr += BLOCK_SIZE_K
@@ -722,8 +712,7 @@ def grouped_gemm_triton(
         assert (
             scale_a.shape[0] == a.shape[0]
         ), f"scale_a.shape: {scale_a.shape}, a.shape: {a.shape}"
-        
-    is_rocm = torch.version.hip is not None
+
     grouped_gemm_triton_kernel[grid](
         a,
         b,
@@ -749,7 +738,6 @@ def grouped_gemm_triton(
         scale_b.stride(1) if scale_b is not None and scale_b.ndim >= 2 else 0,
         use_per_token_if_dynamic,
         **config,
-        BF16_DOT=int(is_rocm),
     )
     return c
 
