@@ -3,11 +3,9 @@ import os
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING, List
-from lb_analysis.analyzer import calculate_gpu_loads, plot_hotness_heatmap, plot_gpu_loads_analysis
 
 import torch.cuda
 
-from lb_analysis.visualization import LoadBalanceVisualizer
 from sglang.srt.managers.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
@@ -15,6 +13,9 @@ from sglang.srt.managers.expert_location import ExpertLocationMetadata
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
+
+from lb_analysis.analyzer import calculate_gpu_loads, plot_hotness_heatmap
+from lb_analysis.visualization import LoadBalanceVisualizer
 
 logger = logging.getLogger(__name__)
 
