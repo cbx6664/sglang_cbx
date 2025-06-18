@@ -17,7 +17,6 @@ import base64
 import builtins
 import ctypes
 import dataclasses
-import functools
 import importlib
 import io
 import ipaddress
@@ -1385,11 +1384,6 @@ def crash_on_warnings():
 def print_warning_once(msg: str) -> None:
     # Set the stacklevel to 2 to print the caller's line info
     logger.warning(msg, stacklevel=2)
-
-
-@functools.lru_cache(None)
-def print_info_once(msg: str) -> None:
-    logger.info(msg)
 
 
 def get_device_name(device_id: int = 0) -> str:

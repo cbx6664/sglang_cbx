@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING, List
@@ -13,6 +14,10 @@ from sglang.srt.managers.expert_location import ExpertLocationMetadata
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
+
+# Add the parent directory to sys.path to find lb_analysis
+_current_dir = Path(__file__).parent.parent.parent.parent.parent
+sys.path.insert(0, str(_current_dir))
 
 from lb_analysis.analyzer import calculate_gpu_loads, plot_hotness_heatmap
 from lb_analysis.visualization import LoadBalanceVisualizer
@@ -42,9 +47,9 @@ class EPLBManager:
         logger.info(
             f"[EPLBManager] system started, will rebalance per {self._rebalance_num_iterations} iterations."
         )
-
         # Add rebalance counter for visualization folder naming
         self._rebalance_counter = 0
+
         self._main_generator = self._entrypoint()
 
     def on_forward_pass_end(self):
@@ -72,12 +77,9 @@ class EPLBManager:
             output_mode="object"
         )["logical_count"]
         
-        # Sum up the logical counts and print
-        summed_logical_count = logical_count.sum(dim=0)  # Shape: [num_layer, num_experts]
+        summed_logical_count = logical_count.sum(dim=0)  # Shape: [num_layer, num_experts]Add commentMore actions
         if self._model_runner.tp_rank == 0:  # Only print on rank 0
             logger.info(f"[EPLBManager] Expert distribution data shape: {summed_logical_count.shape}")
-            torch.set_printoptions(threshold=float('inf'))
-            logger.info(f"[EPLBManager] Expert distribution data content (summed across {self._rebalance_num_iterations} forward passes):\n{summed_logical_count}")
             
             # Call lb_analysis visualization functions
             if os.getenv("PLOT_TOKEN_DISTRIBUTION", "false").lower() in ("true", "1", "yes"):
@@ -85,7 +87,7 @@ class EPLBManager:
                     self._visualize_expert_distribution(summed_logical_count, self._rebalance_counter)
                 except Exception as e:
                     logger.error(f"[EPLBManager] Visualization failed: {e}")
-
+                    
         expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
             self._server_args, self._model_runner.model_config, logical_count
         )
@@ -112,7 +114,7 @@ class EPLBManager:
         )
         chunk_size = self._rebalance_layers_per_chunk or 1000000
         return list(_chunk_list(all_layer_ids, chunk_size=chunk_size))
-
+    
     def _visualize_expert_distribution(self, expert_token_counts: torch.Tensor, rebalance_iteration: int):
         """
         Visualize expert distribution using lb_analysis functions.

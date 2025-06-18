@@ -230,7 +230,7 @@ class ModelRunner:
                 "SGLANG_LOG_EXPERT_LOCATION_METADATA"
             ):
                 logger.info(
-                    f"Initial expert_location_metadata: {get_global_expert_location_metadata()}"
+                    f"Initial expert_location_metadata: {get_global_expert_location_metadata().debug_str()}"
                 )
 
             set_global_expert_distribution_recorder(

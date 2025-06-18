@@ -3,7 +3,7 @@ from typing import Optional
 
 import torch
 
-from sglang.srt.managers.eplb_algorithms import deepseek, deepseek_vec, bldm
+from sglang.srt.managers.eplb_algorithms import deepseek, deepseek_vec
 
 
 class EplbAlgorithm(Enum):
@@ -11,7 +11,6 @@ class EplbAlgorithm(Enum):
     deepseek_hierarchical = auto()
     deepseek_vec = auto()
     deepseek_vec_hierarchical = auto()
-    bldm = auto()
     # TODO may have more algorithm later
 
 
@@ -44,15 +43,6 @@ def rebalance_experts(
             num_groups=num_groups,
             num_nodes=num_nodes,
             enable_hierarchical=algorithm == EplbAlgorithm.deepseek_vec_hierarchical,
-        )
-
-    if algorithm == EplbAlgorithm.bldm:
-        return bldm.rebalance_experts(
-            tokens_per_expert=tokens_per_expert,
-            num_physical_experts=num_physical_experts,
-            num_local_physical_experts=num_local_physical_experts,
-            num_groups=num_groups,
-            num_nodes=num_nodes,
         )
 
     raise NotImplementedError

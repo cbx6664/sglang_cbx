@@ -394,6 +394,7 @@ class FlashAttentionBackend(AttentionBackend):
                         dtype=torch.int32,
                     )
                     metadata_expand.max_seq_len_q = 1
+                    metadata_expand.max_seq_len_k = self.speculative_step_id + 1
                     metadata_expand.cu_seqlens_q = torch.arange(
                         0,
                         metadata_expand.cache_seqlens_int32.numel() + 1,
@@ -548,6 +549,9 @@ class FlashAttentionBackend(AttentionBackend):
                         metadata_expand.cache_seqlens_int32, dim=0, dtype=torch.int32
                     ),
                     (1, 0),
+                )
+                metadata_expand.max_seq_len_k = (
+                    metadata_expand.cache_seqlens_int32.max().item()
                 )
                 self.forward_metadata_spec_decode_expand = metadata_expand
         elif forward_batch.forward_mode.is_extend_or_draft_extend_or_mixed():
@@ -1417,6 +1421,9 @@ class FlashAttentionBackend(AttentionBackend):
                         ]
                     )
                     metadata_expand.max_seq_len_q = 1
+                    metadata_expand.max_seq_len_k = (
+                        self.speculative_step_id + 1
+                    )  # , do this in replay
                     metadata_expand.cu_seqlens_q = (
                         self.draft_decode_metadata_topk_expand["cu_seqlens_q"][
                             : bs * self.topk + 1
@@ -1758,6 +1765,9 @@ class FlashAttentionBackend(AttentionBackend):
                         dim=0,
                         dtype=torch.int32,
                     )
+                )
+                metadata_expand.max_seq_len_k = (
+                    metadata_expand.cache_seqlens_int32.max().item()
                 )
         elif forward_mode.is_draft_extend():
             metadata = self.draft_extend_metadata[bs]

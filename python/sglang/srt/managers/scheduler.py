@@ -179,27 +179,6 @@ class EmbeddingBatchResult:
     bid: int
 
 
-class IdleSleeper:
-    """
-    In setups which have long inactivity periods it is desirable to reduce
-    system power consumption when sglang does nothing. This would lead not only
-    to power savings, but also to more CPU thermal headroom when a request
-    eventually comes. This is important in cases when multiple GPUs are connected
-    as each GPU would otherwise pin one thread at 100% CPU usage.
-
-    The simplest solution is to use zmq.Poller on all sockets that may receive
-    data that needs handling immediately.
-    """
-
-    def __init__(self, sockets):
-        self.poller = zmq.Poller()
-        for s in sockets:
-            self.poller.register(s, zmq.POLLIN)
-
-    def maybe_sleep(self):
-        self.poller.poll(1000)
-
-
 class Scheduler(
     SchedulerOutputProcessorMixin,
     SchedulerDisaggregationDecodeMixin,
@@ -249,8 +228,6 @@ class Scheduler(
 
         # Init inter-process communication
         context = zmq.Context(2)
-        self.idle_sleeper = None
-
         if self.pp_rank == 0 and self.attn_tp_rank == 0:
             self.recv_from_tokenizer = get_zmq_socket(
                 context, zmq.PULL, port_args.scheduler_input_ipc_name, False
@@ -273,13 +250,6 @@ class Scheduler(
             self.recv_from_rpc = get_zmq_socket(
                 context, zmq.DEALER, port_args.rpc_ipc_name, False
             )
-            if self.server_args.sleep_on_idle:
-                self.idle_sleeper = IdleSleeper(
-                    [
-                        self.recv_from_tokenizer,
-                        self.recv_from_rpc,
-                    ]
-                )
         else:
             self.recv_from_tokenizer = None
             self.recv_from_rpc = None
@@ -508,10 +478,6 @@ class Scheduler(
         )
         self.init_disaggregation()
 
-    def maybe_sleep_on_idle(self):
-        if self.idle_sleeper is not None:
-            self.idle_sleeper.maybe_sleep()
-
     def init_tokenizer(self):
         server_args = self.server_args
 
@@ -701,7 +667,6 @@ class Scheduler(
                 # When the server is idle, do self-check and re-init some states
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
-                self.maybe_sleep_on_idle()
 
             self.last_batch = batch
 
@@ -746,7 +711,6 @@ class Scheduler(
                 # When the server is idle, do self-check and re-init some states
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
-                self.maybe_sleep_on_idle()
 
             self.last_batch = batch
 
@@ -852,7 +816,6 @@ class Scheduler(
             if server_is_idle:
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
-                self.maybe_sleep_on_idle()
 
     def recv_requests(self) -> List[Req]:
         """Receive results at tp_rank = 0 and broadcast it to all other TP ranks."""
@@ -1193,15 +1156,15 @@ class Scheduler(
             f"#new-token: {adder.log_input_tokens}, "
             f"#cached-token: {adder.log_hit_tokens}, "
             f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
+            f"#running-req: {running_bs}, "
         )
 
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
             f += f"#unbootstrapped-req: {len(self.disagg_prefill_bootstrap_queue.queue)}, "
             f += f"#queue-req: {len(self.waiting_queue)}, "
             f += f"#transferring-req: {len(self.disagg_prefill_inflight_queue)}, "
-            f += f"input throughput (token/s): {self.last_input_throughput:.2f} "
+            f += f"time: {gap_latency:.2f} "
         else:
-            f += f"#running-req: {running_bs}, "
             f += f"#queue-req: {len(self.waiting_queue)}"
 
         logger.info(f)
