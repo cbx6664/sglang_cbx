@@ -2332,7 +2332,7 @@ class Scheduler(
         if output_dir is None:
             output_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp")
         if activities is None:
-            activities = ["CPU", "GPU"]
+            activities = ["CPU", "GPU", "RPD"]
 
         self.torch_profiler_output_dir = output_dir
         self.torch_profiler_with_stack = with_stack
@@ -2401,9 +2401,12 @@ class Scheduler(
 
             self.rpd_profiler = rpdTracerControl()
             self.rpd_profiler.setPythonTrace(True)
-            self.rpd_profiler.start()
-            self.rpd_profiler.rangePush("", "rpd profile range", "")
-            self.profile_in_progress = True
+
+            # Only start RPD profiler on rank 0 and 1
+            if self.tp_rank == 0 or self.tp_rank == 1:
+                self.rpd_profiler.start()
+                self.rpd_profiler.rangePush("", "rpd profile range", "")
+                self.profile_in_progress = True
         elif torchprof_activities:
             self.torch_profiler = torch.profiler.profile(
                 activities=torchprof_activities,
@@ -2449,7 +2452,8 @@ class Scheduler(
             )
             torch.distributed.barrier(self.tp_cpu_group)
 
-        if self.rpd_profiler is not None:
+        # Only stop RPD profiler on rank 0 and 1
+        if self.rpd_profiler is not None and (self.tp_rank == 0 or self.tp_rank == 1):
             self.rpd_profiler.rangePop()
             self.rpd_profiler.stop()
             self.rpd_profiler.flush()
