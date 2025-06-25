@@ -11,12 +11,11 @@ LOGFILE="sglang_client_log_$TIMESTAMP.json"
 # Run the benchmark with specified parameters and save logs
 python3 -m sglang.bench_serving \
     --backend sglang \
-    --tokenizer Xenova/grok-1-tokenizer \
+    --tokenizer /home/bingxche/deepseek-v3-5layer \
     --dataset-name random \
-    --random-input 1024\
-    --random-output 1024 \
-    --num-prompts 240 \
-    --request-rate 8 \
+    --random-input-len 100\
+    --random-output-len 2 \
+    --num-prompts 5 \
     --output-file online.jsonl 2>&1 | tee "$LOGFILE"
 
 # Stop profiling via API
