@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Callable, List, Optional, Tuple
 
 import einops
@@ -203,6 +204,9 @@ class EPMoE(torch.nn.Module):
         self.activation = activation
         self.routed_scaling_factor = routed_scaling_factor
         self.use_per_token_if_dynamic = use_per_token_if_dynamic
+
+        # Counter for stateful cyclical assignment during balanced routing tests
+        self.assignment_counter = 0
 
         if quant_config is None:
             self.quant_method: Optional[QuantizeMethodBase] = UnquantizedEPMoEMethod()
@@ -418,6 +422,11 @@ class EPMoE(torch.nn.Module):
                 use_per_token_if_dynamic=self.use_per_token_if_dynamic,
             )
 
+        if get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"[EPMoE.forward_normal] Entry: hidden_states={hidden_states.shape}, router_logits={router_logits.shape} \n hidden_states data : {hidden_states.cpu()} \n router_logits data: {router_logits.cpu()}"
+            )
+
         topk_weights, topk_ids = select_experts(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -434,10 +443,51 @@ class EPMoE(torch.nn.Module):
                 layer_id=self.layer_id,
             ),
         )
+        # ---- START: Logic for balanced routing test ----
+        if os.getenv("FORCE_BALANCE") == "1":
+            num_tokens = hidden_states.shape[0]
+
+            # Stateful cyclical assignment using a counter
+            start_index = self.assignment_counter
+            end_index = start_index + num_tokens * self.top_k
+            indices = torch.arange(
+                start_index, end_index, device=hidden_states.device
+            )
+            balanced_ids_flat = indices % self.num_experts
+
+            # Update the counter for the next call. Wrap to avoid potential overflow with very long runs.
+            self.assignment_counter = end_index % (self.num_experts * 1024)
+
+            # Reshape to [num_tokens, top_k]
+            topk_ids = balanced_ids_flat.reshape(num_tokens, self.top_k)
+
+            # Create uniform weights
+            topk_weights = torch.full_like(
+                topk_ids, fill_value=(1.0 / self.top_k), dtype=hidden_states.dtype
+            )
+
+            if get_tensor_model_parallel_rank() == 0:
+                logger.info(
+                    f"[EPMoE.forward_normal] FORCED STATEFUL CYCLICAL ROUTING ENABLED for num_tokens={num_tokens}."
+                )
+                logger.info(
+                    f"  - Assignment Counter: {start_index} -> {end_index}"
+                )
+        # ---- END: Logic for balanced routing test ----
+
+        if get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"[EPMoE.forward_normal] After select_experts: topk_weights={topk_weights.shape}, topk_ids={topk_ids.shape}, \n topk_weights data: {topk_weights.cpu()}, \n topk_ids data: {topk_ids.cpu()}"
+            )
 
         reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
             topk_ids, self.num_experts
         )
+
+        if get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"[EPMoE.forward_normal] After run_moe_ep_preproess: src2dst={src2dst.shape}, seg_indptr={seg_indptr.shape}, \n src2dst data:{src2dst.cpu()} \n seg_indptr data:{seg_indptr.cpu()}"
+            )
 
         gateup_input = torch.empty(
             (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
@@ -621,6 +671,11 @@ class EPMoE(torch.nn.Module):
             0,
             BLOCK_SIZE=512,
         )
+        if get_tensor_model_parallel_rank() == 0:
+            logger.info(
+                f"[EPMoE.forward_normal] After post_reorder (scatter): output={output.shape}, \n output data: {output.cpu()}"
+            )
+
         return output
 
     @classmethod
