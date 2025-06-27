@@ -13,8 +13,10 @@
 # ==============================================================================
 
 import math
+import os
 from typing import Callable, Optional
 
+from sglang.srt.distributed import get_tensor_model_parallel_rank
 import torch
 import torch.nn.functional as F
 
@@ -36,6 +38,10 @@ from sglang.srt.utils import (
     is_cuda,
     is_hip,
 )
+
+import logging
+logger = logging.getLogger(__name__)
+_round_robin_counter = 0
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -451,6 +457,8 @@ def select_experts(
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
+    global _round_robin_counter
+
     router_logits, correction_bias = (
         expert_location_dispatch.transform_select_experts_inputs(
             router_logits=router_logits,
@@ -459,11 +467,46 @@ def select_experts(
         )
     )
 
+    if os.environ.get("FORCE_BALANCE_TOPK") == "1":
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info(
+        #         "force_lb: [select_experts] Modifying router_logits for forced balancing."
+        #     )
+        num_tokens = hidden_states.shape[0]
+        num_experts = router_logits.shape[1]
+        num_assignments = num_tokens * top_k
+
+        # Create a balanced assignment of experts to tokens, continuing from the last assignment
+        expert_indices = (
+            torch.arange(num_assignments, device=hidden_states.device)
+            + _round_robin_counter
+        ) % num_experts
+        topk_ids_balanced = expert_indices.view(num_tokens, top_k).to(torch.int64)
+
+        # Update the counter for the next batch
+        _round_robin_counter = (_round_robin_counter + num_assignments) % num_experts
+
+        # Create new router_logits to enforce the balanced expert selection
+        new_router_logits = torch.full_like(router_logits, -1e9)
+        row_indices = (
+            torch.arange(num_tokens, device=router_logits.device)
+            .unsqueeze(1)
+            .expand_as(topk_ids_balanced)
+        )
+        new_router_logits.scatter_(1, topk_ids_balanced, 0)
+        router_logits = new_router_logits
+        # Disable correction_bias when forcing balance
+        correction_bias = None
+
     # DeepSeek V2/V3/R1 series models use grouped_top_k
     if use_grouped_topk:
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info("[select_experts] Taking the grouped_topk path.")
         assert topk_group is not None
         assert num_expert_group is not None
         if correction_bias is None:
+            # if get_tensor_model_parallel_rank() == 0:
+            #     logger.info("[select_experts] Taking the grouped_topk path.")
             topk_weights, topk_ids = grouped_topk(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
@@ -477,6 +520,8 @@ def select_experts(
                 expert_location_dispatch_info=expert_location_dispatch_info,
             )
         else:
+            # if get_tensor_model_parallel_rank() == 0:
+            #     logger.info("[select_experts] Taking the biased_grouped_topk path.")
             topk_weights, topk_ids = biased_grouped_topk(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
@@ -495,6 +540,8 @@ def select_experts(
             num_token_non_padded is None
         ), "num_token_non_padded is not yet supported in fused_topk_native"
         assert expert_location_dispatch_info is None
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info("[select_experts] Taking the fused_topk_native path.")
         topk_weights, topk_ids = fused_topk_native(
             hidden_states=hidden_states,
             gating_output=router_logits,

@@ -422,10 +422,10 @@ class EPMoE(torch.nn.Module):
                 use_per_token_if_dynamic=self.use_per_token_if_dynamic,
             )
 
-        if get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"[EPMoE.forward_normal] Entry: hidden_states={hidden_states.shape}, router_logits={router_logits.shape} \n hidden_states data : {hidden_states.cpu()} \n router_logits data: {router_logits.cpu()}"
-            )
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info(
+        #         f"[EPMoE.forward_normal] Entry: hidden_states={hidden_states.shape}, router_logits={router_logits.shape} \n hidden_states data : {hidden_states.cpu()} \n router_logits data: {router_logits.cpu()}"
+        #     )
 
         topk_weights, topk_ids = select_experts(
             hidden_states=hidden_states,
@@ -444,7 +444,7 @@ class EPMoE(torch.nn.Module):
             ),
         )
         # ---- START: Logic for balanced routing test ----
-        if os.getenv("FORCE_BALANCE") == "1":
+        if os.getenv("FORCE_BALANCE_LAYER") == "1":
             num_tokens = hidden_states.shape[0]
 
             # Stateful cyclical assignment using a counter
@@ -475,19 +475,19 @@ class EPMoE(torch.nn.Module):
                 )
         # ---- END: Logic for balanced routing test ----
 
-        if get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"[EPMoE.forward_normal] After select_experts: topk_weights={topk_weights.shape}, topk_ids={topk_ids.shape}, \n topk_weights data: {topk_weights.cpu()}, \n topk_ids data: {topk_ids.cpu()}"
-            )
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info(
+        #         f"[EPMoE.forward_normal] After select_experts: topk_weights={topk_weights.shape}, topk_ids={topk_ids.shape}, \n topk_weights data: {topk_weights.cpu()}, \n topk_ids data: {topk_ids.cpu()}"
+        #     )
 
         reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
             topk_ids, self.num_experts
         )
 
-        if get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"[EPMoE.forward_normal] After run_moe_ep_preproess: src2dst={src2dst.shape}, seg_indptr={seg_indptr.shape}, \n src2dst data:{src2dst.cpu()} \n seg_indptr data:{seg_indptr.cpu()}"
-            )
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info(
+        #         f"[EPMoE.forward_normal] After run_moe_ep_preproess: src2dst={src2dst.shape}, seg_indptr={seg_indptr.shape}, \n src2dst data:{src2dst.cpu()} \n seg_indptr data:{seg_indptr.cpu()}"
+        #     )
 
         gateup_input = torch.empty(
             (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
@@ -671,10 +671,10 @@ class EPMoE(torch.nn.Module):
             0,
             BLOCK_SIZE=512,
         )
-        if get_tensor_model_parallel_rank() == 0:
-            logger.info(
-                f"[EPMoE.forward_normal] After post_reorder (scatter): output={output.shape}, \n output data: {output.cpu()}"
-            )
+        # if get_tensor_model_parallel_rank() == 0:
+        #     logger.info(
+        #         f"[EPMoE.forward_normal] After post_reorder (scatter): output={output.shape}, \n output data: {output.cpu()}"
+        #     )
 
         return output
 
