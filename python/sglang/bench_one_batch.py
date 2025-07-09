@@ -75,6 +75,7 @@ from sglang.srt.utils import (
     require_mlp_tp_gather,
     set_gpu_proc_affinity,
     suppress_other_loggers,
+    DeepEPMode,
 )
 
 
@@ -276,6 +277,9 @@ def _maybe_prepare_mlp_sync_batch(batch: ScheduleBatch, model_runner):
             disable_cuda_graph=model_runner.server_args.disable_cuda_graph,
             spec_algorithm=SpeculativeAlgorithm.NONE,
             speculative_num_draft_tokens=None,
+            enable_two_batch_overlap=model_runner.server_args.enable_two_batch_overlap,
+            enable_deepep_moe=model_runner.server_args.enable_deepep_moe,
+            deepep_mode=DeepEPMode[model_runner.server_args.deepep_mode],
             require_mlp_tp_gather=require_mlp_tp_gather(model_runner.server_args),
         )
 
@@ -470,6 +474,11 @@ def latency_test(
 
     rank_print("Benchmark ...")
 
+    profile_filename_prefix = bench_args.profile_filename_prefix
+    profiler_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR")
+    if profiler_dir:
+        profile_filename_prefix = os.path.join(profiler_dir, profile_filename_prefix)
+
     # Run the sweep
     result_list = []
     for bs, il, ol in itertools.product(
@@ -487,7 +496,7 @@ def latency_test(
             server_args.device,
             bench_args.log_decode_step,
             bench_args.profile if tp_rank == 0 else None,
-            bench_args.profile_filename_prefix,
+            profile_filename_prefix,
         )
         if ret is not None:
             result_list.append(ret)
