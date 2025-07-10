@@ -441,6 +441,53 @@ else:
     fused_topk_native = fused_topk_torch_native
 
 
+def _apply_random_balance(router_logits: torch.Tensor, correction_bias: Optional[torch.Tensor]):
+    """Replaces router_logits with random noise to achieve random expert selection."""
+    router_logits = torch.randn_like(router_logits)
+    if correction_bias is not None:
+        correction_bias = torch.zeros_like(correction_bias)
+    return router_logits, correction_bias
+
+
+def _apply_round_robin_balancing(
+    router_logits: torch.Tensor, correction_bias: Optional[torch.Tensor], top_k: int
+) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Enforces a round-robin expert assignment to balance load across experts.
+
+    Each token is assigned `top_k` experts in a sequential, rotating manner.
+    The assignment wraps around if the number of experts is exceeded.
+    A global counter ensures continuity across batches.
+
+    Example (top_k=2, num_experts=4, counter=0):
+        Token 0 → [0, 1]
+        Token 1 → [2, 3]
+        Token 2 → [0, 1] (wraps around)
+    """
+    global _round_robin_counter
+    num_tokens, num_experts = router_logits.shape
+    num_assignments = num_tokens * top_k
+
+    # Round-robin assignment of experts to tokens
+    expert_indices = (
+        torch.arange(num_assignments, device=router_logits.device)
+        + _round_robin_counter
+    ) % num_experts
+    topk_ids_balanced = expert_indices.view(num_tokens, top_k).to(torch.int64)
+
+    # Update the counter for the next batch to continue the round-robin pattern
+    _round_robin_counter = (_round_robin_counter + num_assignments) % num_experts
+
+    # Construct new router_logits that enforce the balanced expert selection
+    new_router_logits = torch.full_like(router_logits, -1e9)
+    new_router_logits.scatter_(1, topk_ids_balanced, 0)
+
+    # Zero out correction_bias when forcing balance for consistency
+    if correction_bias is not None:
+        correction_bias = torch.zeros_like(correction_bias)
+
+    return new_router_logits, correction_bias
+
+
 def select_experts(
     hidden_states: torch.Tensor,
     router_logits: torch.Tensor,
@@ -457,8 +504,6 @@ def select_experts(
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
-    global _round_robin_counter
-
     router_logits, correction_bias = (
         expert_location_dispatch.transform_select_experts_inputs(
             router_logits=router_logits,
@@ -467,36 +512,21 @@ def select_experts(
         )
     )
 
-    if os.environ.get("FORCE_BALANCE_TOPK") == "1":
-        # if get_tensor_model_parallel_rank() == 0:
-        #     logger.info(
-        #         "force_lb: [select_experts] Modifying router_logits for forced balancing."
-        #     )
-        num_tokens = hidden_states.shape[0]
-        num_experts = router_logits.shape[1]
-        num_assignments = num_tokens * top_k
+    if os.environ.get("RANDOM_BALANCE_ROUTING") == "1":
+        with torch.profiler.record_function("_apply_random_balance"):
+            router_logits, correction_bias = _apply_random_balance(router_logits, correction_bias)
+        logger.info(f"[Random balance] random_balance_routing was applied.")
 
-        # Create a balanced assignment of experts to tokens, continuing from the last assignment
-        expert_indices = (
-            torch.arange(num_assignments, device=hidden_states.device)
-            + _round_robin_counter
-        ) % num_experts
-        topk_ids_balanced = expert_indices.view(num_tokens, top_k).to(torch.int64)
+    
 
-        # Update the counter for the next batch
-        _round_robin_counter = (_round_robin_counter + num_assignments) % num_experts
-
-        # Create new router_logits to enforce the balanced expert selection
-        new_router_logits = torch.full_like(router_logits, -1e9)
-        row_indices = (
-            torch.arange(num_tokens, device=router_logits.device)
-            .unsqueeze(1)
-            .expand_as(topk_ids_balanced)
-        )
-        new_router_logits.scatter_(1, topk_ids_balanced, 0)
-        router_logits = new_router_logits
-        # Disable correction_bias when forcing balance
-        correction_bias = None
+    if os.environ.get("RR_BALANCE_ROUTING") == "1":
+        with torch.profiler.record_function("_apply_round_robin_balancing"):
+            router_logits, correction_bias = _apply_round_robin_balancing(
+                router_logits=router_logits,
+                correction_bias=correction_bias,
+                top_k=top_k,
+            )
+        logger.info(f"[Force balance] force_balance_topk was applied.")
 
     # DeepSeek V2/V3/R1 series models use grouped_top_k
     if use_grouped_topk:
