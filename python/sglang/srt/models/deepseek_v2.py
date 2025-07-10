@@ -384,6 +384,7 @@ class DeepseekV2MoE(nn.Module):
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
         shared_output = self._forward_shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)
+        # TODO: 这里也可以改router_logits为强制随机选择专家
         router_logits = self.gate(hidden_states)
         final_hidden_states = self.experts(
             hidden_states=hidden_states, router_logits=router_logits
@@ -1817,7 +1818,16 @@ class DeepseekV2ForCausalLM(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
-        hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            with_stack=True,
+        ) as prof:
+            hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
+            if torch.distributed.get_rank() == 0:
+                print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1))
 
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch
