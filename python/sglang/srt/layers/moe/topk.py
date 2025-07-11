@@ -13,6 +13,7 @@
 # ==============================================================================
 
 import math
+import os
 from typing import Callable, Optional
 
 import torch
@@ -35,6 +36,9 @@ from sglang.srt.utils import (
     is_cuda,
     is_hip,
 )
+import logging
+logger = logging.getLogger(__name__)
+_round_robin_counter = 0
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -483,7 +487,6 @@ def select_experts(
     if os.environ.get("RANDOM_BALANCE_ROUTING") == "1":
         with torch.profiler.record_function("_apply_random_balance"):
             router_logits, correction_bias = _apply_random_balance(router_logits, correction_bias)
-        logger.info(f"[Random balance] random_balance_routing was applied.")
 
     
 
@@ -494,7 +497,6 @@ def select_experts(
                 correction_bias=correction_bias,
                 top_k=top_k,
             )
-        logger.info(f"[Force balance] force_balance_topk was applied.")
 
     # DeepSeek V2/V3/R1 series models use grouped_top_k
     if use_grouped_topk:
