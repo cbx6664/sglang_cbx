@@ -476,6 +476,12 @@ def select_experts(
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
+    logger.info(f"[select_experts entry]\n"
+                f"  expert_location_dispatch_info.partial_logical_to_rank_dispatch_physical_map: {expert_location_dispatch_info.partial_logical_to_rank_dispatch_physical_map}\n"
+                f"  expert_location_dispatch_info.partial_logical_to_all_physical_map: {expert_location_dispatch_info.partial_logical_to_all_physical_map}\n"
+                f"  expert_location_dispatch_info.partial_logical_to_all_physical_map_num_valid: {expert_location_dispatch_info.partial_logical_to_all_physical_map_num_valid}\n"
+                f"  expert_location_dispatch_info.num_physical_experts: {expert_location_dispatch_info.num_physical_experts}\n")
+                
     router_logits, correction_bias = (
         expert_location_dispatch.transform_select_experts_inputs(
             router_logits=router_logits,

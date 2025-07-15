@@ -19,6 +19,7 @@
 import logging
 import os
 from enum import IntEnum, auto
+from torchinfo import summary
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
@@ -383,17 +384,30 @@ class DeepseekV2MoE(nn.Module):
 
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
         shared_output = self._forward_shared_experts(hidden_states)
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MoE.forward_normal after shared_experts, before moe gate]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  shared_output shape: {shared_output.shape if shared_output is not None else None}\n"
+                    f"  shared_output value: {shared_output}")
         # router_logits: (num_tokens, n_experts)
         router_logits = self.gate(hidden_states)
         final_hidden_states = self.experts(
             hidden_states=hidden_states, router_logits=router_logits
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MoE.forward_normal after experts]\n"
+                    f"  final_hidden_states shape: {final_hidden_states.shape}\n"
+                    f"  final_hidden_states value: {final_hidden_states}")
         if not _is_cuda:
             final_hidden_states *= self.routed_scaling_factor
         if shared_output is not None:
             final_hidden_states = final_hidden_states + shared_output
+            logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MoE.forward_normal after add shared_output, before all_reduce]\n"
+                        f"  final_hidden_states shape: {final_hidden_states.shape}\n"
+                        f"  final_hidden_states value: {final_hidden_states}")
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MoE.forward_normal after all_reduce]\n"
+                    f"  final_hidden_states shape: {final_hidden_states.shape}\n"
+                    f"  final_hidden_states value: {final_hidden_states}")
         return final_hidden_states
 
     def forward_deepep(
@@ -475,7 +489,9 @@ class DeepseekV2MoE(nn.Module):
 
     def _forward_shared_experts(self, hidden_states):
         if self.num_fused_shared_experts == 0:
+            logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MoE._forward_shared_experts num_fused_shared_experts: {self.num_fused_shared_experts}")
             return self.shared_experts(hidden_states)
+            
         else:
             return None
 
@@ -862,6 +878,11 @@ class DeepseekV2AttentionMLA(nn.Module):
         forward_batch: ForwardBatch,
         zero_allocator: BumpAllocator,
     ):
+        logger.info(f"layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2AttentionMLA.forward entry\n"
+                    f"attn_tp_size: {get_attention_tp_size()}\n"
+                    f"attn_tp_rank: {get_attention_tp_rank()}\n"
+                    )
+
         s = self.forward_prepare(
             positions=positions,
             hidden_states=hidden_states,
@@ -1542,10 +1563,25 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
-
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward before layer_communicator.prepare_attn]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value: {residual}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids.shape: {forward_batch.input_ids.shape}\n"
+                    f"  forward_batch.positions.shape: {forward_batch.positions.shape}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.global_num_tokens_cpu: {forward_batch.global_num_tokens_cpu}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n")
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.prepare_attn]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value: {residual}\n")
 
         hidden_states = self.self_attn(
             positions=positions,
@@ -1553,16 +1589,32 @@ class DeepseekV2DecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after self_attn]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.prepare_mlp]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value: {residual}\n")
 
         hidden_states = self.mlp(hidden_states, forward_batch)
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after mlp]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}")
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.postprocess_layer]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value: {hidden_states}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value: {residual}\n")
 
         if self.enable_dp_attention and self.speculative_algorithm.is_eagle():
             # NOTE: this line resolves the degradation of MTP reception rate for non-zero DP ranks.
@@ -1816,7 +1868,37 @@ class DeepseekV2ForCausalLM(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        
+        logger.info(f"[DeepseekV2ForCausalLM.forward entry]\n"
+                    f"  input_ids shape: {input_ids.shape}\n"
+                    f"  positions shape: {positions.shape}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids.shape: {forward_batch.input_ids.shape}\n"
+                    f"  forward_batch.positions.shape: {forward_batch.positions.shape}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.global_num_tokens_cpu: {forward_batch.global_num_tokens_cpu}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n")
+        
         hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
+        
+        col_names = ["input_size", "output_size", "num_params", "kernel_size", "mult_adds"]
+        
+        # Pass non-tensor arguments as kwargs to summary.
+        kwargs = {'forward_batch': forward_batch}
+        if input_embeds is not None:
+            kwargs['input_embeds'] = input_embeds
+
+        stat = summary(
+            self.model,
+            input_data=[input_ids, positions],
+            col_names=col_names,
+            col_width=25,
+            depth=200,
+            verbose=1,
+            device=input_ids.device,
+            **kwargs,
+        )
+        logger.info(f"\n rank {parallel_state.get_tensor_model_parallel_rank()}, model summary: \n{stat}\n")
 
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch

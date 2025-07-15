@@ -40,7 +40,7 @@ from sglang.srt.layers.quantization.fp8_kernel import (
     sglang_per_token_quant_fp8,
 )
 from sglang.srt.layers.quantization.fp8_utils import normalize_e4m3fn_to_e4m3fnuz
-from sglang.srt.managers.expert_location import get_global_expert_location_metadata
+from sglang.srt.managers.expert_location import ExpertLocationMetadata, get_global_expert_location_metadata
 from sglang.srt.managers.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
@@ -401,6 +401,13 @@ class EPMoE(torch.nn.Module):
         return output
 
     def forward_normal(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        logger.info(
+                f"\n[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal entry]\n"
+                f"  hidden_states shape: {hidden_states.shape}\n"
+                # f"  hidden_states value: {hidden_states}\n"
+                f"  router_logits shape: {router_logits.shape}\n"
+                f"  router_logits value: {router_logits}"
+            )
         assert self.quant_method is not None
         hidden_states_shape = hidden_states.shape
         hidden_states_dtype = hidden_states.dtype
@@ -428,10 +435,35 @@ class EPMoE(torch.nn.Module):
                 layer_id=self.layer_id,
             ),
         )
+        expert_location_metadata = get_global_expert_location_metadata()
+
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after select_experts]\n"
+                f"  topk_weights shape: {topk_weights.shape}\n"
+                f"  topk_weights value: {topk_weights}\n"
+                f"  ExpertLocationMetadata.physical_to_logical_map: {expert_location_metadata.physical_to_logical_map}\n"
+                f"  ExpertLocationMetadata.physical_to_logical_map_cpu: {expert_location_metadata.physical_to_logical_map_cpu}\n"
+                f"  ExpertLocationMetadata.logical_to_all_physical_map: {expert_location_metadata.logical_to_all_physical_map}\n"
+                f"  ExpertLocationMetadata.logical_to_all_physical_map_num_valid: {expert_location_metadata.logical_to_all_physical_map_num_valid}\n"
+                f"  ExpertLocationMetadata.logical_to_rank_dispatch_physical_map: {expert_location_metadata.logical_to_rank_dispatch_physical_map}\n"
+                f"  topk_ids shape: {topk_ids.shape}\n"
+                f"  topk_ids value: {topk_ids}"
+            )
 
         reorder_topk_ids, src2dst, seg_indptr = run_moe_ep_preproess(
             topk_ids, self.num_experts
         )
+
+        torch.set_printoptions(threshold=1000, linewidth=1200)
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after run_moe_ep_preproess]\n"
+                f"  reorder_topk_ids shape: {reorder_topk_ids.shape}\n"
+                f"  reorder_topk_ids value: {reorder_topk_ids}\n"
+                f"  src2dst shape: {src2dst.shape}\n"
+                f"  src2dst value: {src2dst}\n"
+                f"  seg_indptr shape: {seg_indptr.shape}\n" 
+                f"  seg_indptr value: {seg_indptr}"
+            )
 
         gateup_input = torch.empty(
             (int(hidden_states.shape[0] * self.top_k), hidden_states.shape[1]),
@@ -455,6 +487,9 @@ class EPMoE(torch.nn.Module):
                 self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
 
         # PreReorder
+        logger.info(f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal before pre_reorder]\n"
+                    f"  gateup_input shape: {gateup_input.shape}\n"
+                    f"  gateup_input[:, :10]:\n{gateup_input[:, :10]}")
         pre_reorder_triton_kernel[(hidden_states.shape[0],)](
             hidden_states,
             gateup_input,
@@ -468,6 +503,11 @@ class EPMoE(torch.nn.Module):
             BLOCK_SIZE=512,
             use_per_token_if_dynamic=self.use_per_token_if_dynamic,
         )
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after pre_reorder]\n"
+                f"  gateup_input shape: {gateup_input.shape}\n"
+                f"  gateup_input[:, :10]:\n{gateup_input[:, :10]}"
+            )
         dispose_tensor(hidden_states)
 
         if (
@@ -488,13 +528,24 @@ class EPMoE(torch.nn.Module):
             self.w13_input_scale = scale
 
         seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
+        logger.info(f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after seg_indptr_cur_rank]\n"
+                    f"seg_indptr_cur_rank shape: {seg_indptr_cur_rank.shape}\n"
+                    f"seg_indptr_cur_rank value: {seg_indptr_cur_rank}")
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
             device=hidden_states_device,
             dtype=torch.int64,
         )
+        logger.info(f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after weight_indices_cur_rank]\n"
+                    f"weight_indices_cur_rank shape: {weight_indices_cur_rank.shape}\n"
+                    f"weight_indices_cur_rank value: {weight_indices_cur_rank}")
         # GroupGemm-0
+        logger.info(
+            f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal before GroupGemm-0]\n"
+            f"  w13_weight shape: {self.w13_weight.shape}\n"
+            # f"  w13_weight value: {self.w13_weight}"
+        )
         gateup_output = self.grouped_gemm_runner(
             a=gateup_input,
             b=self.w13_weight,
@@ -514,6 +565,12 @@ class EPMoE(torch.nn.Module):
             block_shape=self.block_shape,
         )
         del gateup_input
+
+        logger.info(
+            f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after GroupGemm-0]\n"
+            f"  gateup_output shape: {gateup_output.shape}\n"
+            # f"  gateup_output[:, :100]:\n{gateup_output[:, :100]}"
+        )
 
         # Act
         if self.activation_scheme == "dynamic" and not self.use_block_quant:
@@ -562,6 +619,12 @@ class EPMoE(torch.nn.Module):
             raise ValueError(f"Unsupported activation: {self.activation=}")
         del gateup_output
 
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after activation down_input]\n"
+                f"  down_input shape: {down_input.shape}\n"
+                # f"  down_input value: {down_input}"
+            )
+
         if self.activation_scheme == "dynamic" and not self.use_block_quant:
             if self.use_per_token_if_dynamic:
                 down_input, self.w2_input_scale = sglang_per_token_quant_fp8(down_input)
@@ -579,6 +642,13 @@ class EPMoE(torch.nn.Module):
             device=hidden_states_device,
             dtype=hidden_states_dtype,
         )
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal before GroupGemm-1]\n"
+                f"  down_input shape: {down_input.shape}\n"
+                # f"  down_input value: {down_input}\n"
+                f"  w2_weight shape: {self.w2_weight.shape}\n"
+                # f"  w2_weight value: {self.w2_weight}"
+            )
         down_output = self.grouped_gemm_runner(
             a=down_input,
             b=self.w2_weight,
@@ -598,6 +668,12 @@ class EPMoE(torch.nn.Module):
         )
         del down_input
 
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after GroupGemm-1 down_output]\n"
+                f"  down_output shape: {down_output.shape}\n"
+                # f"  down_output value: {down_output}"
+            )
+
         # PostReorder
         output = torch.empty(
             hidden_states_shape, dtype=hidden_states_dtype, device=hidden_states_device
@@ -615,6 +691,11 @@ class EPMoE(torch.nn.Module):
             0,
             BLOCK_SIZE=512,
         )
+        logger.info(
+                f"[layer {self.layer_id}, rank {self.tp_rank}, EPMoE.forward_normal after post_reorder]\n"
+                f"  output shape: {output.shape}\n"
+                f"  output value[:, :10]:\n{output[:, :10]}"
+            )
         return output
 
     @classmethod
@@ -658,14 +739,6 @@ class EPMoE(torch.nn.Module):
                 self.layer_id, expert_id
             )
         )
-        for physical_expert_id in physical_expert_ids:
-            self._weight_loader_physical(
-                param=param,
-                loaded_weight=loaded_weight,
-                weight_name=weight_name,
-                shard_id=shard_id,
-                expert_id=physical_expert_id,
-            )
 
     def _weight_loader_physical(
         self,
