@@ -894,14 +894,12 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
                         w2_weight_scale, requires_grad=False
                     )
                     layer.w2_input_scale = None
-                if _use_aiter:
-                    layer.w13_weight = torch.nn.Parameter(
+                if _use_aiter and global_server_args_dict["enable_deepep_moe"]:
+                    layer.w13_weight.data.copy_(
                         shuffle_weight(layer.w13_weight.data, (16, 16)),
-                        requires_grad=False,
                     )
-                    layer.w2_weight = torch.nn.Parameter(
+                    layer.w2_weight.data.copy_(
                         shuffle_weight(layer.w2_weight.data, (16, 16)),
-                        requires_grad=False,
                     )
             return
 
