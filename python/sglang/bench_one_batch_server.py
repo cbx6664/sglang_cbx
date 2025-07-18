@@ -27,7 +27,6 @@ from sglang.profiler import run_profile
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
-from sglang.test.test_utils import is_in_ci, write_github_step_summary
 
 
 @dataclasses.dataclass
@@ -369,8 +368,8 @@ def run_benchmark(server_args: ServerArgs, bench_args: BenchArgs):
     # print metrics table
     print(summary)
 
-    if is_in_ci():
-        write_github_step_summary(summary)
+    # if is_in_ci():
+    #     write_github_step_summary(summary)
 
 
 if __name__ == "__main__":
