@@ -81,6 +81,7 @@ class EPLBManager:
         logger.info(f"\n[EPLBManager] logical_count.shape: {logical_count.shape}"
                     f"\nlogical_count: {logical_count}"
                     f"\nlogical_count.sum(dim=0).shape: {logical_count.sum(dim=0).shape}"
+                    f"\nlogical_count.sum(dim=0): {logical_count.sum(dim=0)}"
                     )
         
         summed_logical_count = logical_count.sum(dim=0)  # Shape: [num_layer, num_experts]Add commentMore actions
