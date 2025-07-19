@@ -77,6 +77,12 @@ class EPLBManager:
             output_mode="object"
         )["logical_count"]
         
+        torch.set_printoptions(linewidth=1000, threshold=float('inf'))
+        logger.info(f"\n[EPLBManager] logical_count.shape: {logical_count.shape}"
+                    f"\nlogical_count: {logical_count}"
+                    f"\nlogical_count.sum(dim=0).shape: {logical_count.sum(dim=0).shape}"
+                    )
+        
         summed_logical_count = logical_count.sum(dim=0)  # Shape: [num_layer, num_experts]Add commentMore actions
         if self._model_runner.tp_rank == 0:  # Only print on rank 0
             logger.info(f"[EPLBManager] Expert distribution data shape: {summed_logical_count.shape}")
