@@ -1009,7 +1009,15 @@ class DeepEPMoE(EPMoE):
         num_recv_tokens_per_expert: List[int],
         forward_mode: ForwardMode,
     ):
+        logger.info(f"[DeepEPMoE.forward entry] \n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                    f"  topk_idx shape: {topk_idx.shape}\n"
+                    f"  topk_idx value[:,:10]: {topk_idx[:,:10]}\n"
+                    f"  topk_weights shape: {topk_weights.shape}\n"
+                    f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n")
         if _use_aiter:
+            logger.info(f"[DeepEPMoE.forward _use_aiter=true] \n")
             # in forward_aiter, we skip token permutation and unpermutation, which have been fused inside aiter kernel
             return self.forward_aiter(hidden_states, topk_idx, topk_weights)
         resolved_deepep_mode = self.deepep_mode.resolve(forward_mode)

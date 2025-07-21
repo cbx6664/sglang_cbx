@@ -271,6 +271,14 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
                 None,
             )
         else:
+            logger.info(f"[DeepEPDispatcher.dispatch_b entry] \n"
+                        f"  hidden_states shape: {hidden_states.shape}\n"
+                        f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                        f"  topk_idx shape: {topk_idx.shape}\n"
+                        f"  topk_idx value[:,:10]: {topk_idx[:,:10]}\n"
+                        f"  topk_weights shape: {topk_weights.shape}\n"
+                        f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n"
+                        f"  previous_event: {previous_event}\n")
             (
                 hidden_states,
                 topk_idx,
@@ -280,6 +288,15 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             ) = self._dispatch_core(
                 hidden_states, topk_idx, topk_weights, previous_event
             )
+            logger.info(f"[DeepEPDispatcher.dispatch_b after dispatch_core] \n"
+                        f"  hidden_states shape: {hidden_states.shape}\n"
+                        f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                        f"  topk_idx shape: {topk_idx.shape}\n"
+                        f"  topk_idx value[:,:10]: {topk_idx[:,:10]}\n"
+                        f"  topk_weights shape: {topk_weights.shape}\n"
+                        f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n"
+                        f"  num_recv_tokens_per_expert_list: {num_recv_tokens_per_expert_list}\n"
+                        f"  event: {event}\n")
             event.current_stream_wait() if self.async_finish else ()
             if hidden_states.shape[0] > 0:
                 reorder_topk_ids, seg_indptr, hidden_states = self._deepep_permute(
@@ -296,6 +313,20 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
                 )
 
             masked_m = expected_m = None
+            
+            logger.info(f"[DeepEPDispatcher.dispatch_b after _deepep_permute, ends] \n"
+                        f"  hidden_states shape: {hidden_states.shape}\n"
+                        f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                        f"  topk_idx shape: {topk_idx.shape}\n"
+                        f"  topk_idx value[:,:10]: {topk_idx[:,:10]}\n"
+                        f"  topk_weights shape: {topk_weights.shape}\n"
+                        f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n"
+                        f"  reorder_topk_ids shape: {reorder_topk_ids.shape}\n"
+                        f"  reorder_topk_ids value: {reorder_topk_ids}\n"
+                        f"  seg_indptr shape: {seg_indptr.shape}\n"
+                        f"  seg_indptr value: {seg_indptr}\n"
+                        f"  masked_m: {masked_m}\n"
+                        f"  expected_m: {expected_m}\n")
             return (
                 hidden_states,
                 topk_idx,
@@ -328,6 +359,12 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             async_finish=self.async_finish,
             allocate_on_comm_stream=previous_event is not None,
         )
+        logger.info(f"[DeepEPDispatcher._dispatch_core after get_dispatch_layout] \n"
+                    f"  num_tokens_per_rank: {num_tokens_per_rank}\n"
+                    f"  num_tokens_per_rdma_rank: {num_tokens_per_rdma_rank}\n"
+                    f"  num_tokens_per_expert: {num_tokens_per_expert}\n"
+                    f"  is_token_in_rank: {is_token_in_rank}\n"
+                    f"  previous_event: {previous_event}\n")
 
         # FIXME: `handle` should be transmitted with tokens from dispatch to combine.
         # However, doing this would incur an unknown synchronization error, but keeping
@@ -361,6 +398,15 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
             num_tokens_per_expert=num_tokens_per_expert,
         )
+        logger.info(f"[DeepEPDispatcher._dispatch_core ends] \n"
+                    f"  recv_x shape: {recv_x.shape}\n"
+                    f"  recv_x value[:,:10]: {recv_x[:,:10]}\n"
+                    f"  recv_topk_idx shape: {recv_topk_idx.shape}\n"
+                    f"  recv_topk_idx value[:,:10]: {recv_topk_idx[:,:10]}\n"
+                    f"  recv_topk_weights shape: {recv_topk_weights.shape}\n"
+                    f"  recv_topk_weights value[:,:10]: {recv_topk_weights[:,:10]}\n"
+                    f"  num_recv_tokens_per_expert_list: {num_recv_tokens_per_expert_list}\n"
+                    f"  event: {event}\n")
 
         return (
             recv_x,
@@ -390,6 +436,13 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             seg_indptr = torch.zeros(
                 (self.num_experts + 1,), device=hidden_states.device, dtype=torch.int64
             )
+            logger.info(f"[DeepEPDispatcher._deepep_permute _use_aiter=true, ends] \n"
+                        f"  reorder_topk_ids shape: {reorder_topk_ids.shape}\n"
+                        f"  reorder_topk_ids value: {reorder_topk_ids}\n"
+                        f"  seg_indptr shape: {seg_indptr.shape}\n"
+                        f"  seg_indptr value: {seg_indptr}\n"
+                        f"  hidden_states shape: {hidden_states.shape}\n"
+                        f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n")
             return reorder_topk_ids, seg_indptr, hidden_states
 
         reorder_topk_ids, self.src2dst, seg_indptr = deepep_run_moe_deep_preprocess(
@@ -710,12 +763,21 @@ class DeepEPDispatcher:
         topk_weights: torch.Tensor,
         forward_mode: ForwardMode = None,
     ):
+        logger.info(f"[DeepEPDispatcher.dispatch_a entry] \n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                    f"  topk_idx shape: {topk_idx.shape}\n"
+                    f"  topk_idx value[:,:10]: {topk_idx[:,:10]}\n"
+                    f"  topk_weights shape: {topk_weights.shape}\n"
+                    f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n")
         self._update_stage(_Stage.INITIAL, _Stage.AFTER_DISPATCH_A)
         inner_state = self._get_impl(forward_mode).dispatch_a(
             hidden_states=hidden_states,
             topk_idx=topk_idx,
             topk_weights=topk_weights,
         )
+        logger.info(f"[DeepEPDispatcher.dispatch_a] after dispatch_a\n"
+                    f"  inner_state: {inner_state}\n")
         self._dispatch_intermediate_state = forward_mode, inner_state
 
     def dispatch_b(self):

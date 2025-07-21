@@ -362,7 +362,7 @@ class DeepseekV2MoE(nn.Module):
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MLP.forward_deepep entry]\n"
                     f"  forward_mode: {forward_mode}\n"
                     f"  hidden_states shape: {hidden_states.shape}\n"
-                    f"  hidden_states value: {hidden_states}\n")
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n")
         
         if is_non_idle_and_non_empty(forward_mode, hidden_states):
             # router_logits: (num_tokens, n_experts)
@@ -376,7 +376,7 @@ class DeepseekV2MoE(nn.Module):
             
             logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MLP.forward_deepep after shared_experts]\n"
                         f"  shared_output shape: {shared_output.shape if shared_output is not None else None}\n"
-                        f"  shared_output value: {shared_output if shared_output is not None else None}\n")
+                        f"  shared_output value[:,:10]: {shared_output[:,:10] if shared_output is not None else None}\n")
             
             topk_weights, topk_idx = select_experts(
                 hidden_states=hidden_states,
@@ -426,7 +426,7 @@ class DeepseekV2MoE(nn.Module):
             
             logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MLP.forward_deepep after dispatch]\n"
                         f"  hidden_states shape: {hidden_states.shape if hidden_states is not None else None}\n"
-                        f"  hidden_states value: {hidden_states if hidden_states is not None else None}\n"
+                        f"  hidden_states value[:,:10]: {hidden_states[:,:10] if hidden_states is not None else None}\n"
                         f"  topk_idx shape: {topk_idx.shape if topk_idx is not None else None}\n"
                         f"  topk_idx value: {topk_idx if topk_idx is not None else None}\n"
                         f"  topk_weights shape: {topk_weights.shape if topk_weights is not None else None}\n"
@@ -462,7 +462,7 @@ class DeepseekV2MoE(nn.Module):
             )
             logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MLP.forward_deepep after combine]\n"
                         f"  final_hidden_states_before_add_shared_output shape: {final_hidden_states.shape}\n"
-                        f"  final_hidden_states_before_add_shared_output value: {final_hidden_states}\n")
+                        f"  final_hidden_states_before_add_shared_output value[:,:10]: {final_hidden_states[:,:10]}\n")
 
         if shared_output is not None:
             x = shared_output
@@ -473,9 +473,9 @@ class DeepseekV2MoE(nn.Module):
         
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2MLP.forward_deepep end]\n"
                     f"  shared_output shape: {shared_output.shape if shared_output is not None else None}\n"
-                    f"  shared_output value: {shared_output if shared_output is not None else None}\n"
+                    f"  shared_output value[:,:10]: {shared_output[:,:10] if shared_output is not None else None}\n"
                     f"  final_hidden_states_after_add_shared_output shape: {final_hidden_states.shape}\n"
-                    f"  final_hidden_states_after_add_shared_output value: {final_hidden_states}\n")
+                    f"  final_hidden_states_after_add_shared_output value[:,:10]: {final_hidden_states[:,:10]}\n")
 
         return final_hidden_states
 
@@ -1526,14 +1526,36 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward before layer_communicator.prepare_attn]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value[:,:10]: {residual[:,:10] if residual is not None else None}\n"
+                    f"  forward_batch.forward_mode: {forward_batch.forward_mode}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids: {forward_batch.input_ids}\n"
+                    f"  forward_batch.seq_lens: {forward_batch.seq_lens}\n"
+                    f"  forward_batch.seq_lens_sum: {forward_batch.seq_lens_sum}\n"
+                    f"  forward_batch.extend_num_tokens: {forward_batch.extend_num_tokens}\n"
+                    f"  forward_batch.extend_seq_lens: {forward_batch.extend_seq_lens}\n"
+                    f"  forward_batch.extend_prefix_lens: {forward_batch.extend_prefix_lens}\n"
+                    f"  forward_batch.token_to_kv_pool: {forward_batch.token_to_kv_pool}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.padded_static_len: {forward_batch.padded_static_len}\n"
+                    f"  forward_batch.num_token_non_padded: {forward_batch.num_token_non_padded}\n"
+                    f"  forward_batch.tbo_split_seq_index: {forward_batch.tbo_split_seq_index}\n"
+                    f"  forward_batch.tbo_parent_token_range: {forward_batch.tbo_parent_token_range}\n"
+                    f"  forward_batch.tbo_children: {forward_batch.tbo_children}\n")
+        
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.prepare_attn]\n"
                     f"  hidden_states shape: {hidden_states.shape}\n"
-                    f"  hidden_states value: {hidden_states}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
                     f"  residual shape: {residual.shape if residual is not None else None}\n"
-                    f"  residual value: {residual}\n")
+                    f"  residual value[:,:10]: {residual[:,:10] if residual is not None else None}\n")
 
         hidden_states = self.self_attn(
             positions=positions,
@@ -1541,29 +1563,82 @@ class DeepseekV2DecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+        logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward before layer_communicator.prepare_mlp]\n"
+                    f"  hidden_states shape: {hidden_states.shape}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                    f"  residual shape: {residual.shape if residual is not None else None}\n"
+                    f"  residual value[:,:10]: {residual[:,:10] if residual is not None else None}\n")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.prepare_mlp]\n"
                     f"  hidden_states shape: {hidden_states.shape}\n"
-                    f"  hidden_states value: {hidden_states}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
                     f"  residual shape: {residual.shape if residual is not None else None}\n"
-                    f"  residual value: {residual}\n")
+                    f"  residual value[:,:10]: {residual[:,:10]}\n"
+                    f"  forward_batch.forward_mode: {forward_batch.forward_mode}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids: {forward_batch.input_ids}\n"
+                    f"  forward_batch.seq_lens: {forward_batch.seq_lens}\n"
+                    f"  forward_batch.seq_lens_sum: {forward_batch.seq_lens_sum}\n"
+                    f"  forward_batch.extend_num_tokens: {forward_batch.extend_num_tokens}\n"
+                    f"  forward_batch.extend_seq_lens: {forward_batch.extend_seq_lens}\n"
+                    f"  forward_batch.extend_prefix_lens: {forward_batch.extend_prefix_lens}\n"
+                    f"  forward_batch.token_to_kv_pool: {forward_batch.token_to_kv_pool}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.padded_static_len: {forward_batch.padded_static_len}\n"
+                    f"  forward_batch.num_token_non_padded: {forward_batch.num_token_non_padded}\n"
+                    f"  forward_batch.tbo_split_seq_index: {forward_batch.tbo_split_seq_index}\n"
+                    f"  forward_batch.tbo_parent_token_range: {forward_batch.tbo_parent_token_range}\n"
+                    f"  forward_batch.tbo_children: {forward_batch.tbo_children}\n")
 
         hidden_states = self.mlp(hidden_states, forward_batch)
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after mlp]\n"
                     f"  hidden_states shape: {hidden_states.shape}\n"
-                    f"  hidden_states value: {hidden_states}")
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                    f"  forward_batch.forward_mode: {forward_batch.forward_mode}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids: {forward_batch.input_ids}\n"
+                    f"  forward_batch.seq_lens: {forward_batch.seq_lens}\n"
+                    f"  forward_batch.seq_lens_sum: {forward_batch.seq_lens_sum}\n"
+                    f"  forward_batch.extend_num_tokens: {forward_batch.extend_num_tokens}\n"
+                    f"  forward_batch.extend_seq_lens: {forward_batch.extend_seq_lens}\n"
+                    f"  forward_batch.extend_prefix_lens: {forward_batch.extend_prefix_lens}\n"
+                    f"  forward_batch.token_to_kv_pool: {forward_batch.token_to_kv_pool}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.padded_static_len: {forward_batch.padded_static_len}\n"
+                    f"  forward_batch.num_token_non_padded: {forward_batch.num_token_non_padded}\n"
+                    f"  forward_batch.tbo_split_seq_index: {forward_batch.tbo_split_seq_index}\n"
+                    f"  forward_batch.tbo_parent_token_range: {forward_batch.tbo_parent_token_range}\n"
+                    f"  forward_batch.tbo_children: {forward_batch.tbo_children}\n")
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
         logger.info(f"[layer {self.layer_id}, rank {parallel_state.get_tensor_model_parallel_rank()}, DeepseekV2DecoderLayer.forward after layer_communicator.postprocess_layer]\n"
                     f"  hidden_states shape: {hidden_states.shape}\n"
-                    f"  hidden_states value: {hidden_states}\n"
+                    f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
                     f"  residual shape: {residual.shape if residual is not None else None}\n"
-                    f"  residual value: {residual}\n")
+                    f"  residual value[:,:10]: {residual[:,:10] if residual is not None else None}\n"
+                    f"  forward_batch.forward_mode: {forward_batch.forward_mode}\n"
+                    f"  forward_batch.batch_size: {forward_batch.batch_size}\n"
+                    f"  forward_batch.input_ids: {forward_batch.input_ids}\n"
+                    f"  forward_batch.seq_lens: {forward_batch.seq_lens}\n"
+                    f"  forward_batch.seq_lens_sum: {forward_batch.seq_lens_sum}\n"
+                    f"  forward_batch.extend_num_tokens: {forward_batch.extend_num_tokens}\n"
+                    f"  forward_batch.extend_seq_lens: {forward_batch.extend_seq_lens}\n"
+                    f"  forward_batch.extend_prefix_lens: {forward_batch.extend_prefix_lens}\n"
+                    f"  forward_batch.token_to_kv_pool: {forward_batch.token_to_kv_pool}\n"
+                    f"  forward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}\n"
+                    f"  forward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}\n"
+                    f"  forward_batch.padded_static_len: {forward_batch.padded_static_len}\n"
+                    f"  forward_batch.num_token_non_padded: {forward_batch.num_token_non_padded}\n"
+                    f"  forward_batch.tbo_split_seq_index: {forward_batch.tbo_split_seq_index}\n"
+                    f"  forward_batch.tbo_parent_token_range: {forward_batch.tbo_parent_token_range}\n"
+                    f"  forward_batch.tbo_children: {forward_batch.tbo_children}\n")
 
         return hidden_states, residual
 
@@ -1833,6 +1908,7 @@ class DeepseekV2ForCausalLM(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        torch.set_printoptions(linewidth=1000, threshold=float('inf'))
         logger.info(f"[DeepseekV2ForCausalLM.forward entry]\n"
                     f"  input_ids shape: {input_ids.shape}\n"
                     f"  positions shape: {positions.shape}\n"

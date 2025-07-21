@@ -190,6 +190,14 @@ def biased_grouped_topk_impl(
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
 ):
     assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
+    logger.info(f"[biased_grouped_topk_impl entry]\n"
+                f"  hidden_states shape: {hidden_states.shape}\n"
+                f"  hidden_states value[:,:10]: {hidden_states[:,:10]}\n"
+                f"  num_expert_group: {num_expert_group}\n"
+                f"  topk_group: {topk_group}\n"
+                f"  num_fused_shared_experts: {num_fused_shared_experts}\n"
+                f"  expert_location_dispatch_info.partial_logical_to_rank_dispatch_physical_map: {expert_location_dispatch_info.partial_logical_to_rank_dispatch_physical_map}\n"
+                f"  expert_location_dispatch_info.partial_logical_to_all_physical_map: {expert_location_dispatch_info.partial_logical_to_all_physical_map}\n")
 
     scores = gating_output.sigmoid()
     num_token = scores.shape[0]
@@ -235,8 +243,19 @@ def biased_grouped_topk_impl(
         topk_weights = topk_weights / topk_weights_sum
 
     topk_weights, topk_ids = topk_weights.to(torch.float32), topk_ids.to(torch.int32)
+    logger.info(f"[biased_grouped_topk_impl before topk_ids_logical_to_physical]\n"
+                f"  topk_weights shape: {topk_weights.shape}\n"
+                f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n"
+                f"  topk_ids shape: {topk_ids.shape}\n"
+                f"  topk_ids value[:,:10]: {topk_ids[:,:10]}\n")
     topk_ids = topk_ids_logical_to_physical(topk_ids, expert_location_dispatch_info)
+    logger.info(f"[biased_grouped_topk_impl after topk_ids_logical_to_physical]\n"
+                f"  topk_ids shape: {topk_ids.shape}\n"
+                f"  topk_ids value[:,:10]: {topk_ids[:,:10]}\n")
     _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
+    logger.info(f"[biased_grouped_topk_impl after _mask_topk_ids_padded_region]\n"
+                f"  topk_ids shape: {topk_ids.shape}\n"
+                f"  topk_ids value[:,:10]: {topk_ids[:,:10]}\n")
     return topk_weights, topk_ids
 
 
@@ -424,6 +443,7 @@ def select_experts(
                 expert_location_dispatch_info=expert_location_dispatch_info,
             )
         else:
+            logger.info(f"[select_experts] use_grouped_topk is True, correction_bias is not None, biased_grouped_topk will be called")
             topk_weights, topk_ids = biased_grouped_topk(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
@@ -471,5 +491,10 @@ def select_experts(
         )
 
     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
+    
+    logger.info(f"[select_experts ends] topk_weights shape: {topk_weights.shape}\n"
+                f"  topk_weights value[:,:10]: {topk_weights[:,:10]}\n"
+                f"  topk_ids shape: {topk_ids.shape}\n"
+                f"  topk_ids value[:,:10]: {topk_ids[:,:10]}\n")
 
     return topk_weights, topk_ids
