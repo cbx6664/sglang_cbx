@@ -4,8 +4,12 @@ import dataclasses
 import json
 import logging
 import os
+import sys
 import time
 from typing import Tuple
+
+# Add the correct sglang python package path
+sys.path.insert(0, '/sgl-workspace/sglang_private/python')
 
 import torch
 import pandas as pd
@@ -47,6 +51,8 @@ class BenchArgs:
                            help="Prefix for profiling output files")
         parser.add_argument("--max-new-tokens", type=int, default=BenchArgs.max_new_tokens,
                            help="Maximum number of new tokens to generate")
+        parser.add_argument("--ignore-eos", action="store_true",
+                           help="Ignore end of sequence tokens")
         parser.add_argument("--record-expert-distribution", action="store_true",
                            help="Enable expert distribution recording")
         parser.add_argument("--expert-distribution-dir", type=str, default=BenchArgs.expert_distribution_dir,
@@ -245,9 +251,6 @@ def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: Be
         "server_args": dataclasses.asdict(server_args),
         "bench_args": dataclasses.asdict(bench_args),
         "sampling_params": {
-            "temperature": bench_args.temperature,
-            "top_k": bench_args.top_k,
-            "top_p": bench_args.top_p,
             "max_new_tokens": bench_args.max_new_tokens,
             "ignore_eos": bench_args.ignore_eos,
         }
@@ -289,9 +292,6 @@ def main(server_args: ServerArgs, bench_args: BenchArgs):
     
     # Create sampling params
     sampling_params = {
-        "temperature": bench_args.temperature,
-        "top_k": bench_args.top_k,
-        "top_p": bench_args.top_p,
         "max_new_tokens": bench_args.max_new_tokens,
         "ignore_eos": bench_args.ignore_eos,
     }
