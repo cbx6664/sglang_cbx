@@ -334,10 +334,41 @@ class DeepseekV2MoE(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, forward_batch: Optional[ForwardBatch] = None
     ) -> torch.Tensor:
-        if not self._enable_deepep_moe:
-            return self.forward_normal(hidden_states)
+        if self.layer_id == 32:
+            # It's a good practice to synchronize before starting the profiler
+            torch.cuda.synchronize()
+            with torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                record_shapes=True,
+                with_stack=False,
+            ) as prof:
+                if not self._enable_deepep_moe:
+                    result = self.forward_normal(hidden_states)
+                else:
+                    result = self.forward_deepep(hidden_states, forward_batch)
+            torch.cuda.synchronize()
+            
+            logger.info(f"DeepseekV2MoE Layer {self.layer_id} forward profiling: "
+                        f"\nhidden_states.shape: {hidden_states.shape}, "
+                        f"\nforward_batch.forward_mode: {forward_batch.forward_mode}, "
+                        f"\nforward_batch.batch_size: {forward_batch.batch_size}, "
+                        f"\nforward_batch.seq_lens: {forward_batch.seq_lens}, "
+                        f"\nforward_batch.global_num_tokens_cpu: {forward_batch.global_num_tokens_cpu}, "
+                        f"\nforward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}, "
+                        f"\nforward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}, "
+                        f"\nforward_batch.global_forward_mode: {forward_batch.global_forward_mode}, "
+                        f"\nrank {parallel_state.get_tensor_model_parallel_rank()}, "
+                        f"\nprof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1): \n{prof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1)}")
+            
+            return result
         else:
-            return self.forward_deepep(hidden_states, forward_batch)
+            if not self._enable_deepep_moe:
+                return self.forward_normal(hidden_states)
+            else:
+                return self.forward_deepep(hidden_states, forward_batch)
 
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
         shared_output = self._forward_shared_experts(hidden_states)
