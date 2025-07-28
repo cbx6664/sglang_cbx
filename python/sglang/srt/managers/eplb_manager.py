@@ -105,9 +105,6 @@ class EPLBManager:
             prof.stop()
             
             logger.info(f"[EPLBManager] rebalance profiling: "
-                        f"\nlogical_count keys: {list(logical_count.keys()) if logical_count else 'None'}, "
-                        f"\nupdate_layer_ids_chunks length: {len(update_layer_ids_chunks)}, "
-                        f"\nupdate_layer_ids_chunks: {update_layer_ids_chunks}, "
                         f"\nrank {parallel_state.get_tensor_model_parallel_rank()}, "
                         f"\nprof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1): \n{prof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1)}")
         
