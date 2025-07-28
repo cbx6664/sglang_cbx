@@ -353,10 +353,16 @@ class ServerArgs:
                 self.dp_size > 1
             ), "Please set a dp-size > 1. You can use 1 < dp-size <= tp-size "
             assert self.tp_size % self.dp_size == 0
-            self.chunked_prefill_size = self.chunked_prefill_size // self.dp_size
-            logger.warning(
-                f"DP attention is enabled. The chunked prefill size is adjusted to {self.chunked_prefill_size} to avoid MoE kernel issues. "
-            )
+            if os.getenv("UNLIMIT_CHUNKED_PREFILL_SIZE", "0") == "1":
+                logger.warning(
+                    f"DP attention is enabled. The chunked prefill size keep unchanged to {self.chunked_prefill_size}. "
+                )
+                
+            else:
+                self.chunked_prefill_size = self.chunked_prefill_size // self.dp_size
+                logger.warning(
+                    f"DP attention is enabled. The chunked prefill size is adjusted to {self.chunked_prefill_size} to avoid MoE kernel issues. "
+                )
 
         if self.enable_dp_lm_head:
             assert (
