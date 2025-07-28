@@ -52,9 +52,27 @@ class EPLBManager:
             yield from self.rebalance()
 
     def rebalance(self):
+        import os
+        import torch
+        from sglang.srt.distributed import parallel_state
+
         logger.info("[EPLBManager] rebalance start")
 
         enable_timing = self._rebalance_layers_per_chunk is None
+        enable_profiling = os.getenv("PROFILE_EPLB", "0") == "1"
+
+        if enable_profiling:
+            # It's a good practice to synchronize before starting the profiler
+            torch.cuda.synchronize()
+            prof = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                record_shapes=True,
+                with_stack=False,
+            )
+            prof.start()
 
         if enable_timing:
             torch.cuda.synchronize()
@@ -81,6 +99,18 @@ class EPLBManager:
             torch.cuda.synchronize()
             time_end = time.time()
             msg += f" time={time_end - time_start:.3f}s"
+        
+        if enable_profiling:
+            torch.cuda.synchronize()
+            prof.stop()
+            
+            logger.info(f"[EPLBManager] rebalance profiling: "
+                        f"\nlogical_count keys: {list(logical_count.keys()) if logical_count else 'None'}, "
+                        f"\nupdate_layer_ids_chunks length: {len(update_layer_ids_chunks)}, "
+                        f"\nupdate_layer_ids_chunks: {update_layer_ids_chunks}, "
+                        f"\nrank {parallel_state.get_tensor_model_parallel_rank()}, "
+                        f"\nprof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1): \n{prof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1)}")
+        
         logger.info(msg)
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
