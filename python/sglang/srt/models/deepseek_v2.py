@@ -334,7 +334,7 @@ class DeepseekV2MoE(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, forward_batch: Optional[ForwardBatch] = None
     ) -> torch.Tensor:
-        if self.layer_id == 32:
+        if os.getenv("PROFILE_KERNEL", "0") == "1" and self.layer_id == 32:
             # It's a good practice to synchronize before starting the profiler
             torch.cuda.synchronize()
             with torch.profiler.profile(
