@@ -74,7 +74,7 @@ def get_sglang_engine(server_args: ServerArgs, bench_args: BenchArgs):
         os.makedirs(bench_args.expert_distribution_dir, exist_ok=True)
         os.environ["SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR"] = bench_args.expert_distribution_dir
     
-    return sgl.Engine(**dataclasses.asdict(server_args))
+    return sgl.Engine(server_args=server_args)
 
 
 def load_real_dataset(dataset_path, num_samples=100, dataset_type="all"):
