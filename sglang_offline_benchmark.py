@@ -17,6 +17,8 @@ import sglang as sgl
 from sglang.srt.server_args import ServerArgs
 
 torch.manual_seed(0)
+import logging
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -26,8 +28,6 @@ class BenchArgs:
     num_samples: int = 100
     result_filename: str = "result.jsonl"
     result_dir: str = "."
-    profile: bool = False
-    profile_filename_prefix: str = "profile"
     max_new_tokens: int = 1024
     ignore_eos: bool = False
     record_expert_distribution: bool = True
@@ -45,10 +45,6 @@ class BenchArgs:
                            help="Output filename for results")
         parser.add_argument("--result-dir", type=str, default=BenchArgs.result_dir,
                            help="Directory to save result files")
-        parser.add_argument("--profile", action="store_true",
-                           help="Enable profiling")
-        parser.add_argument("--profile-filename-prefix", type=str, default=BenchArgs.profile_filename_prefix,
-                           help="Prefix for profiling output files")
         parser.add_argument("--max-new-tokens", type=int, default=BenchArgs.max_new_tokens,
                            help="Maximum number of new tokens to generate")
         parser.add_argument("--ignore-eos", action="store_true",
@@ -130,40 +126,6 @@ def load_real_dataset(dataset_path, num_samples=100, dataset_type="all"):
     return prompts
 
 
-def profile_run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: BenchArgs):
-    """Run SGLang with profiling enabled"""
-    llm = get_sglang_engine(server_args, bench_args)
-    
-    # Expert distribution recording
-    if bench_args.record_expert_distribution:
-        llm.start_expert_distribution_record()
-    
-    # Create profile output filename
-    profile_filename = f"{bench_args.profile_filename_prefix}_samples{len(prompts)}.trace.json.gz"
-    profile_dir = f"/tmp/sglang_trace_dir"
-    
-    with torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA
-        ],
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(str(profile_dir))
-    ) as p:
-        start = time.perf_counter()
-        responses = llm.generate(prompt=prompts, sampling_params=sampling_params)
-        end = time.perf_counter()
-    
-    if bench_args.record_expert_distribution:
-        llm.stop_expert_distribution_record()
-        llm.dump_expert_distribution_record()
-    
-    print(p.key_averages().table(sort_by="self_cpu_time_total", row_limit=20))
-    print(p.key_averages().table(sort_by="self_cuda_time_total", row_limit=20))
-    print(f"Profile saved to {profile_dir}")
-    print(f"time: {end - start:.2f}s")
-    llm.shutdown()
-
-
 def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: BenchArgs):
     """Run SGLang inference"""
     llm = get_sglang_engine(server_args, bench_args)
@@ -171,6 +133,7 @@ def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: Be
     # Expert distribution recording
     if bench_args.record_expert_distribution:
         llm.start_expert_distribution_record()
+        logger.info("start_expert_distribution_record()")
     
     start = time.perf_counter()
     responses = llm.generate(prompt=prompts, sampling_params=sampling_params)
@@ -178,8 +141,10 @@ def run_sglang(prompts, sampling_params, server_args: ServerArgs, bench_args: Be
     
     if bench_args.record_expert_distribution:
         llm.stop_expert_distribution_record()
+        logger.info("stop_expert_distribution_record()")
         llm.dump_expert_distribution_record()
-        print(f"Expert distribution saved to: {bench_args.expert_distribution_dir}")
+        logger.info(f"dump_expert_distribution_record()"
+                    f"\nExpert distribution saved to: {bench_args.expert_distribution_dir}")
     
     # Extract token counts and analyze end reasons
     input_tokens = 0
@@ -301,29 +266,26 @@ def main(server_args: ServerArgs, bench_args: BenchArgs):
     print(f"Dataset type: {bench_args.dataset_type}")
     print(f"Total requests: {len(prompts)}")
     
-    if bench_args.profile:
-        profile_run_sglang(prompts, sampling_params, server_args, bench_args)
-    else:
-        input_tokens, output_tokens, elapsed_time, result_path = run_sglang(prompts, sampling_params, server_args, bench_args)
-        
-        total_tokens = input_tokens + output_tokens
-        num_requests = len(prompts)
-        
-        print(f"\n=== THROUGHPUT RESULTS ===")
-        print(f"Throughput: {num_requests / elapsed_time:.2f} requests/s, "
-              f"{total_tokens / elapsed_time:.2f} total tokens/s, "
-              f"{output_tokens / elapsed_time:.2f} output tokens/s")
-        
-        print(f"\n=== DETAILED METRICS ===")
-        print(f"Total requests: {num_requests}")
-        print(f"Total elapsed time: {elapsed_time:.2f}s")
-        print(f"Requests/s: {num_requests / elapsed_time:.2f}")
-        print(f"Total tokens/s: {total_tokens / elapsed_time:.2f}")
-        print(f"Input tokens/s: {input_tokens / elapsed_time:.2f}")
-        print(f"Output tokens/s: {output_tokens / elapsed_time:.2f}")
-        print(f"Total tokens processed: {total_tokens:,}")
-        
-        print(f"\nResults saved to {result_path}")
+    input_tokens, output_tokens, elapsed_time, result_path = run_sglang(prompts, sampling_params, server_args, bench_args)
+    
+    total_tokens = input_tokens + output_tokens
+    num_requests = len(prompts)
+    
+    print(f"\n=== THROUGHPUT RESULTS ===")
+    print(f"Throughput: {num_requests / elapsed_time:.2f} requests/s, "
+            f"{total_tokens / elapsed_time:.2f} total tokens/s, "
+            f"{output_tokens / elapsed_time:.2f} output tokens/s")
+    
+    print(f"\n=== DETAILED METRICS ===")
+    print(f"Total requests: {num_requests}")
+    print(f"Total elapsed time: {elapsed_time:.2f}s")
+    print(f"Requests/s: {num_requests / elapsed_time:.2f}")
+    print(f"Total tokens/s: {total_tokens / elapsed_time:.2f}")
+    print(f"Input tokens/s: {input_tokens / elapsed_time:.2f}")
+    print(f"Output tokens/s: {output_tokens / elapsed_time:.2f}")
+    print(f"Total tokens processed: {total_tokens:,}")
+    
+    print(f"\nResults saved to {result_path}")
 
 
 if __name__ == "__main__":
@@ -334,10 +296,5 @@ if __name__ == "__main__":
     
     server_args = ServerArgs.from_cli_args(args)
     bench_args = BenchArgs.from_cli_args(args)
-    
-    logging.basicConfig(
-        level=getattr(logging, server_args.log_level.upper()),
-        format="%(message)s",
-    )
     
     main(server_args, bench_args) 
