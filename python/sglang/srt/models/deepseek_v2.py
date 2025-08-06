@@ -336,7 +336,7 @@ class DeepseekV2MoE(nn.Module):
     ) -> torch.Tensor:
         if os.getenv("PROFILE_KERNEL", "0") == "1" and self.layer_id in [3, 32, 60]:
             # It's a good practice to synchronize before starting the profiler
-            # torch.cuda.synchronize()
+            torch.cuda.synchronize()
             with torch.profiler.profile(
                 activities=[
                     torch.profiler.ProfilerActivity.CPU,
@@ -349,7 +349,7 @@ class DeepseekV2MoE(nn.Module):
                     result = self.forward_normal(hidden_states)
                 else:
                     result = self.forward_deepep(hidden_states, forward_batch)
-            # torch.cuda.synchronize()
+            torch.cuda.synchronize()
             
             logger.info(f"DeepseekV2MoE Layer {self.layer_id} forward profiling: "
                         f"\nhidden_states.shape: {hidden_states.shape}, "
