@@ -265,6 +265,13 @@ def decode(input_token_ids, batch, model_runner):
 
 def _maybe_prepare_dp_attn_batch(batch: ScheduleBatch, model_runner):
     if model_runner.server_args.enable_dp_attention:
+        from sglang.srt.utils import DeepEPMode
+        
+        # Handle deepep_mode conversion from string to enum
+        deepep_mode_enum = DeepEPMode.auto  # default value
+        if hasattr(model_runner.server_args, 'deepep_mode') and model_runner.server_args.deepep_mode:
+            deepep_mode_enum = DeepEPMode(model_runner.server_args.deepep_mode)
+        
         Scheduler.prepare_dp_attn_batch_raw(
             batch,
             dp_size=model_runner.server_args.dp_size,
@@ -275,6 +282,9 @@ def _maybe_prepare_dp_attn_batch(batch: ScheduleBatch, model_runner):
             disable_cuda_graph=model_runner.server_args.disable_cuda_graph,
             spec_algorithm=SpeculativeAlgorithm.NONE,
             speculative_num_draft_tokens=None,
+            enable_two_batch_overlap=getattr(model_runner.server_args, 'enable_two_batch_overlap', False),
+            enable_deepep_moe=getattr(model_runner.server_args, 'enable_deepep_moe', False),
+            deepep_mode=deepep_mode_enum,
         )
 
 
