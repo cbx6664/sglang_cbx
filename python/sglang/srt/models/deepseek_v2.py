@@ -352,15 +352,15 @@ class DeepseekV2MoE(nn.Module):
             torch.cuda.synchronize()
             
             logger.info(f"DeepseekV2MoE Layer {self.layer_id} forward profiling: "
-                        f"\nhidden_states.shape: {hidden_states.shape}, "
-                        f"\nforward_batch.forward_mode: {forward_batch.forward_mode}, "
-                        f"\nforward_batch.batch_size: {forward_batch.batch_size}, "
-                        f"\nforward_batch.seq_lens: {forward_batch.seq_lens}, "
-                        f"\nforward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}, "
-                        f"\nforward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}, "
-                        f"\nforward_batch.global_forward_mode: {forward_batch.global_forward_mode}, "
-                        f"\nrank {parallel_state.get_tensor_model_parallel_rank()}, "
-                        f"\nprof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1): \n{prof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1)}")
+                        f"\n\t\t\thidden_states.shape: {hidden_states.shape}, "
+                        f"\n\t\t\tforward_batch.forward_mode: {forward_batch.forward_mode}, "
+                        f"\n\t\t\tforward_batch.batch_size: {forward_batch.batch_size}, "
+                        f"\n\t\t\tforward_batch.seq_lens: {forward_batch.seq_lens}, "
+                        f"\n\t\t\tforward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}, "
+                        f"\n\t\t\tforward_batch.dp_local_num_tokens: {forward_batch.dp_local_num_tokens}, "
+                        f"\n\t\t\tforward_batch.global_forward_mode: {forward_batch.global_forward_mode}, "
+                        f"\n\t\t\trank {parallel_state.get_tensor_model_parallel_rank()}, "
+                        f"\n\t\t\tprof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1): \n\t\t{prof.key_averages().table(sort_by='self_cuda_time_total', row_limit=-1)}")
             
             return result
         else:
@@ -370,18 +370,52 @@ class DeepseekV2MoE(nn.Module):
                 return self.forward_deepep(hidden_states, forward_batch)
 
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_normal.entry]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\t\t\thidden_states.shape: {hidden_states.shape}"
+                        f"\n\t\t\thidden_states.value: {hidden_states}"
+                        )
         shared_output = self._forward_shared_experts(hidden_states)
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_normal.shared_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\t\t\tshared_experts.gate_up_proj.weight.shape: {self.shared_experts.gate_up_proj.weight.shape if self.shared_experts.gate_up_proj.weight is not None else None}"
+                        f"\n\t\t\tshared_experts.down_proj.weight.shape: {self.shared_experts.down_proj.weight.shape if self.shared_experts.down_proj.weight is not None else None}"
+                        )
+            logger.info(f"[DeepseekV2MoE.forward_normal.after_forward_shared_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\t\t\tshared_output.shape: {shared_output.shape}"
+                        f"\n\t\t\tshared_output.value: {shared_output}"
+                        )
         # router_logits: (num_tokens, n_experts)
         router_logits = self.gate(hidden_states)
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_normal.gate]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\tgate.weight.shape: {self.gate.weight.shape if self.gate.weight is not None else None}"
+                        )
+            logger.info(f"[DeepseekV2MoE.forward_normal.after_gate]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\trouter_logits.shape: {router_logits.shape}"
+                        f"\n\trouter_logits.value: {router_logits}"
+                        )
         final_hidden_states = self.experts(
             hidden_states=hidden_states, router_logits=router_logits
         )
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_normal.after_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\thidden_states.shape: {final_hidden_states.shape}"
+                        f"\n\thidden_states.value: {final_hidden_states}"
+                        )
         if not _is_cuda:
             final_hidden_states *= self.routed_scaling_factor
         if shared_output is not None:
             final_hidden_states = final_hidden_states + shared_output
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+        
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_normal.exit]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\tfinal_hidden_states.shape: {final_hidden_states.shape}"
+                        f"\n\tfinal_hidden_states.value: {final_hidden_states}"
+                        )            
+
         return final_hidden_states
 
     def forward_deepep(
@@ -391,8 +425,32 @@ class DeepseekV2MoE(nn.Module):
         shared_output = None
         if is_non_idle_and_non_empty(forward_mode, hidden_states):
             # router_logits: (num_tokens, n_experts)
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.entry]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\thidden_states.shape: {hidden_states.shape}"
+                            f"\n\thidden_states.value: {hidden_states}"
+                            )
             router_logits = self.gate(hidden_states)
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.gate]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\tgate.weight.shape: {self.gate.weight.shape if self.gate.weight is not None else None}"
+                        )
+                logger.info(f"[DeepseekV2MoE.forward_deepep.after_gate]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\trouter_logits.shape: {router_logits.shape}"
+                            f"\n\trouter_logits.value: {router_logits}"
+                            )
             shared_output = self._forward_shared_experts(hidden_states)
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_normal.shared_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\tshared_experts.gate_up_proj.weight.shape: {self.shared_experts.gate_up_proj.weight.shape if self.shared_experts.gate_up_proj.weight is not None else None}"
+                        f"\n\tshared_experts.down_proj.weight.shape: {self.shared_experts.down_proj.weight.shape if self.shared_experts.down_proj.weight is not None else None}"
+                        f"\n\tshared_experts.gate_up_proj.bias.shape: {self.shared_experts.gate_up_proj.bias.shape if self.shared_experts.gate_up_proj.bias is not None else None}"
+                        f"\n\tshared_experts.down_proj.bias.shape: {self.shared_experts.down_proj.bias.shape if self.shared_experts.down_proj.bias is not None else None}"
+                        )
+                logger.info(f"[DeepseekV2MoE.forward_deepep.after_forward_shared_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\tshared_output.shape: {shared_output.shape}"
+                            f"\n\tshared_output.value: {shared_output}"
+                            )
             topk_weights, topk_idx = select_experts(
                 hidden_states=hidden_states,
                 router_logits=router_logits,
@@ -409,6 +467,13 @@ class DeepseekV2MoE(nn.Module):
                     layer_id=self.layer_id,
                 ),
             )
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.after_select_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\ttopk_weights.shape: {topk_weights.shape}"
+                            f"\n\ttopk_weights.value: {topk_weights}"
+                            f"\n\ttopk_idx.shape: {topk_idx.shape}"
+                            f"\n\ttopk_idx.value: {topk_idx}"
+                            )
         else:
             topk_idx = torch.full(
                 (0, self.top_k), -1, dtype=torch.int, device=hidden_states.device
@@ -433,6 +498,25 @@ class DeepseekV2MoE(nn.Module):
                 topk_weights=topk_weights,
                 forward_mode=forward_mode,
             )
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.after_dispatch]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\thidden_states.shape: {hidden_states.shape}"
+                            f"\n\thidden_states.value: {hidden_states}"
+                            f"\n\ttopk_idx.shape: {topk_idx.shape}"
+                            f"\n\ttopk_idx.value: {topk_idx}"
+                            f"\n\ttopk_weights.shape: {topk_weights.shape}"
+                            f"\n\ttopk_weights.value: {topk_weights}"
+                            f"\n\treorder_topk_ids.shape: {reorder_topk_ids.shape}"
+                            f"\n\treorder_topk_ids.value: {reorder_topk_ids}"
+                            f"\n\tnum_recv_tokens_per_expert.shape: {num_recv_tokens_per_expert.shape if num_recv_tokens_per_expert is not None else None}"
+                            f"\n\tnum_recv_tokens_per_expert.value: {num_recv_tokens_per_expert if num_recv_tokens_per_expert is not None else None}"
+                            f"\n\tseg_indptr.shape: {seg_indptr.shape if seg_indptr is not None else None}"
+                            f"\n\tseg_indptr.value: {seg_indptr if seg_indptr is not None else None}"
+                            f"\n\tmasked_m.shape: {masked_m.shape if masked_m is not None else None}"
+                            f"\n\tmasked_m.value: {masked_m if masked_m is not None else None}"
+                            f"\n\texpected_m.shape: {expected_m.shape if expected_m is not None else None}"
+                            f"\n\texpected_m.value: {expected_m if expected_m is not None else None}"
+                            )
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
             topk_idx=topk_idx,
@@ -444,6 +528,11 @@ class DeepseekV2MoE(nn.Module):
             num_recv_tokens_per_expert=num_recv_tokens_per_expert,
             forward_mode=forward_mode,
         )
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2MoE.forward_deepep.after_experts]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\thidden_states.shape: {final_hidden_states.shape}"
+                        f"\n\thidden_states.value: {final_hidden_states}"
+                        )
         if self.ep_size > 1:
             final_hidden_states = self.deepep_dispatcher.combine(
                 hidden_states=final_hidden_states,
@@ -451,6 +540,11 @@ class DeepseekV2MoE(nn.Module):
                 topk_weights=topk_weights,
                 forward_mode=forward_mode,
             )
+            if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.after_combine]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\thidden_states.shape: {final_hidden_states.shape}"
+                            f"\n\thidden_states.value: {final_hidden_states}"
+                            )
 
         if shared_output is not None:
             x = shared_output
@@ -458,6 +552,12 @@ class DeepseekV2MoE(nn.Module):
             final_hidden_states = x
         else:
             final_hidden_states *= self.routed_scaling_factor
+            
+        if os.getenv("DEBUG_INFO") == "1":
+                logger.info(f"[DeepseekV2MoE.forward_deepep.exit]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                            f"\n\tfinal_hidden_states.shape: {final_hidden_states.shape}"
+                            f"\n\tfinal_hidden_states.value: {final_hidden_states}"
+                            )
 
         return final_hidden_states
 
@@ -1508,9 +1608,28 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
+        
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2DecoderLayer.forward.entry]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\thidden_states.shape: {hidden_states.shape}"
+                        f"\n\thidden_states.value: {hidden_states}"
+                        f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                        f"\n\tforward_batch.input_ids.shape: {forward_batch.input_ids.shape}"
+                        f"\n\tforward_batch.forward_mode: {forward_batch.forward_mode}"
+                        f"\n\tforward_batch.batch_size: {forward_batch.batch_size}"
+                        f"\n\tforward_batch.global_num_tokens_gpu: {forward_batch.global_num_tokens_gpu}"
+                        f"\n\tget_attention_tp_size(): {get_attention_tp_size()}"
+                        f"\n\tget_attention_tp_size(): {get_attention_tp_size()}"
+                        )
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2DecoderLayer.forward.after_prepare_attn]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                        f"\n\thidden_states.shape: {hidden_states.shape}"
+                        f"\n\thidden_states.value: {hidden_states}"
+                        f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                        )
 
         hidden_states = self.self_attn(
             positions=positions,
@@ -1518,16 +1637,45 @@ class DeepseekV2DecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+        
+        if os.getenv("DEBUG_INFO") == "1": 
+            logger.info(f"[DeepseekV2DecoderLayer.forward.after_self_attn]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                    f"\n\thidden_states.shape: {hidden_states.shape}"
+                    f"\n\thidden_states.value: {hidden_states}"
+                    f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                    )
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
+        
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2DecoderLayer.forward.after_prepare_mlp]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                    f"\n\thidden_states.shape: {hidden_states.shape}"
+                    f"\n\thidden_states.value: {hidden_states}"
+                    f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                    )
+        
 
         hidden_states = self.mlp(hidden_states, forward_batch)
+
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2DecoderLayer.forward.after_mlp]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                    f"\n\thidden_states.shape: {hidden_states.shape}"
+                    f"\n\thidden_states.value: {hidden_states}"
+                    f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                    )
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
+        
+        if os.getenv("DEBUG_INFO") == "1":
+            logger.info(f"[DeepseekV2DecoderLayer.forward.after_postprocess_layer]layer_id: {self.layer_id}, rank: {parallel_state.get_tensor_model_parallel_rank()}"
+                    f"\n\thidden_states.shape: {hidden_states.shape}"
+                    f"\n\thidden_states.value: {hidden_states}"
+                    f"\n\tresidual.shape: {residual.shape if residual is not None else None}"
+                    )
 
         return hidden_states, residual
 
