@@ -96,27 +96,67 @@ def load_real_dataset(dataset_path, num_samples=100, dataset_type="all"):
         for dtype in requested_types:
             count = len(filtered_data[filtered_data['dataset'] == dtype])
             print(f"  {dtype}: {count} samples")
+        
+        # Sample evenly from each requested dataset type
+        datasets_to_use = requested_types
     else:
         filtered_data = full_data
+        datasets_to_use = list(full_data['dataset'].unique())
         print(f"Using all dataset types:")
         print(f"Available samples per dataset:")
-        for dtype in full_data['dataset'].unique():
+        for dtype in datasets_to_use:
             count = len(full_data[full_data['dataset'] == dtype])
             print(f"  {dtype}: {count} samples")
     
-    # Sample the requested number of samples
-    if len(filtered_data) > num_samples:
-        processed_data = filtered_data.sample(n=num_samples, random_state=42).reset_index(drop=True)
-        print(f"Randomly sampled {num_samples} from {len(filtered_data)} available samples")
-    else:
-        processed_data = filtered_data.reset_index(drop=True)
-        print(f"Using all {len(processed_data)} available samples (requested {num_samples})")
+    # Implement even distribution across datasets
+    num_datasets = len(datasets_to_use)
+    samples_per_dataset = num_samples // num_datasets
+    remaining_samples = num_samples % num_datasets
+    
+    print(f"\nTarget distribution for {num_samples} total samples:")
+    print(f"Base samples per dataset: {samples_per_dataset}")
+    if remaining_samples > 0:
+        print(f"Extra samples to distribute: {remaining_samples}")
+    
+    processed_data_list = []
+    actual_samples_per_dataset = {}
+    
+    for i, dtype in enumerate(datasets_to_use):
+        dataset_data = filtered_data[filtered_data['dataset'] == dtype]
+        available_count = len(dataset_data)
+        
+        # Calculate target samples for this dataset
+        target_samples = samples_per_dataset
+        if i < remaining_samples:  # Distribute remaining samples to first few datasets
+            target_samples += 1
+        
+        # Sample from this dataset
+        if available_count >= target_samples:
+            sampled_data = dataset_data.sample(n=target_samples, random_state=42)
+            actual_samples_per_dataset[dtype] = target_samples
+        else:
+            sampled_data = dataset_data
+            actual_samples_per_dataset[dtype] = available_count
+            print(f"Warning: {dtype} only has {available_count} samples, requested {target_samples}")
+        
+        processed_data_list.append(sampled_data)
+    
+    # Combine all sampled data
+    processed_data = pd.concat(processed_data_list, ignore_index=True)
+    
+    # Shuffle the combined data to mix different datasets
+    processed_data = processed_data.sample(frac=1, random_state=42).reset_index(drop=True)
     
     # Show final distribution
-    print(f"Final sample distribution:")
+    print(f"\nFinal sample distribution:")
     final_counts = processed_data['dataset'].value_counts()
-    for dtype, count in final_counts.items():
+    total_actual = 0
+    for dtype in datasets_to_use:
+        count = final_counts.get(dtype, 0)
+        total_actual += count
         print(f"  {dtype}: {count} samples")
+    
+    print(f"Total samples loaded: {total_actual} (requested: {num_samples})")
     
     prompts = []
     for idx, request in processed_data.iterrows():
