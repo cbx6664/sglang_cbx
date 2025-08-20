@@ -1,0 +1,24 @@
+{
+    "num_sources": 1,
+    "num_expert_nodes": 8,
+    "num_experts": 256,
+    "max_num_experts_per_node": 32,
+    "num_redundant_experts": 0,
+    
+    "per_token_cost": 0.00000067,
+    "expert_move_oh": 0,
+    "expert_move_cost_single": 0.00088,
+    "expert_move_cost": 0.0242,
+    "iteration_oh": 0.0012,
+    "num_iterations": 1,
+    "token_discount": 0.01,
+
+    "expert_mapping_file": "/home/bingxche/bind/sglang_cbx/python/sglang/srt/managers/eplb_algorithms/move_optimal_solver/config/mapping_256.json",
+    "token_distribution_file": "/home/bingxche/bind/sglang_cbx/python/sglang/srt/managers/eplb_algorithms/move_optimal_solver/deepseek-v3/layer_3_token_distribution.csv",
+    "expert_layer": 60,
+    "minimize_moves": true,
+    "solver_cutoff_time": 10,
+    "solver_num_threads": 48,
+    "heuristic_max_moves": 32,
+    "solver_log_progress": false
+}

@@ -3,7 +3,7 @@ from typing import Optional
 
 import torch
 
-from sglang.srt.managers.eplb_algorithms import deepseek, deepseek_vec, bldm
+from sglang.srt.managers.eplb_algorithms import deepseek, deepseek_vec, bldm, heuristics
 
 
 class EplbAlgorithm(Enum):
@@ -12,6 +12,7 @@ class EplbAlgorithm(Enum):
     deepseek_vec = auto()
     deepseek_vec_hierarchical = auto()
     bldm = auto()
+    HEURISTICS = auto()
     # TODO may have more algorithm later
 
 
@@ -51,6 +52,22 @@ def rebalance_experts(
             tokens_per_expert=tokens_per_expert.sum(dim=0),
             num_physical_experts=num_physical_experts,
             num_gpus=num_physical_experts // num_local_physical_experts,
+        )
+        
+    if algorithm == EplbAlgorithm.HEURISTICS:        
+        eplb_kwargs = {
+            "num_groups": 1,
+            "num_nodes": 1,
+            "enable_hierarchical": False,
+            "num_iterations": 10,
+            "config_file": "/home/bingxche/bind/sglang_cbx/python/sglang/srt/managers/eplb_algorithms/move_optimal_solver/config/deepseek_mi300_config.json", 
+        }
+
+        return heuristics.rebalance_experts(
+            weight=tokens_per_expert.sum(dim=0),
+            num_replicas=num_physical_experts,
+            num_gpus=num_physical_experts // num_local_physical_experts,
+            **eplb_kwargs,
         )
 
     raise NotImplementedError
