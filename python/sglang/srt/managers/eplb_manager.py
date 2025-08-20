@@ -77,15 +77,42 @@ class EPLBManager:
         if enable_timing:
             torch.cuda.synchronize()
             time_start = time.time()
+            
+        if enable_timing:
+            torch.cuda.synchronize()
+            dump_record_time_start = time.time()
 
         logical_count = get_global_expert_distribution_recorder().dump_record(
             output_mode="object"
         )["logical_count"]
+        
+        if enable_timing:
+            torch.cuda.synchronize()
+            dump_record_time_end = time.time()
+            
+        if enable_timing:
+            torch.cuda.synchronize()
+            calculate_new_expert_location_time_start = time.time()
+            
         expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
             self._server_args, self._model_runner.model_config, logical_count
         )
+        
+        if enable_timing:
+            torch.cuda.synchronize()
+            calculate_new_expert_location_time_end = time.time()
+        
+
 
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
+        
+        logger.info(f"[EPLBManager] update_layer_ids_chunks length: {len(update_layer_ids_chunks)}")
+        logger.info(f"[EPLBManager] update_layer_ids_chunks: {update_layer_ids_chunks}")
+        
+        if enable_timing:
+            torch.cuda.synchronize()
+            update_expert_location_time_start = time.time()
+        
         for chunk_index, update_layer_ids in enumerate(update_layer_ids_chunks):
             if len(update_layer_ids_chunks) > 1:
                 yield
@@ -93,12 +120,27 @@ class EPLBManager:
                 expert_location_metadata,
                 update_layer_ids=update_layer_ids,
             )
+            
+        if enable_timing:
+            torch.cuda.synchronize()
+            update_expert_location_time_end = time.time()
 
-        msg = f"[EPLBManager] rebalance end"
         if enable_timing:
             torch.cuda.synchronize()
             time_end = time.time()
-            msg += f" time={time_end - time_start:.3f}s"
+
+            timing_data = {
+                    "dump_record": (dump_record_time_end - dump_record_time_start) * 1000,
+                    "calculate_new_expert_location": (calculate_new_expert_location_time_end - calculate_new_expert_location_time_start) * 1000,
+                    "update_expert": (update_expert_location_time_end - update_expert_location_time_start) * 1000,
+                    "total": (time_end - time_start) * 1000
+                }
+            
+            msg = f"[EPLBManager] rebalance end - "
+            msg += f"dump_record: {timing_data['dump_record']:.3f}ms, "
+            msg += f"calculate_new_expert_location: {timing_data['calculate_new_expert_location']:.3f}ms, "
+            msg += f"update_expert: {timing_data['update_expert']:.3f}ms, "
+            msg += f"total: {timing_data['total']:.3f}ms"
         
         if enable_profiling:
             torch.cuda.synchronize()
